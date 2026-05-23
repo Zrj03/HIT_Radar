@@ -1,0 +1,3 @@
+uint16 opponent_remaining_coin
+uint16 opponent_total_coin
+uint32 occupy_status

@@ -1,0 +1,23 @@
+/radar/pc_aligner:
+  ros__parameters:
+    sample_lidar: "livox"
+    # 初始化采样点云数目
+    init_sample: 1000000
+    # 对齐器采样模型点数
+    mesh_sample: 1000000
+    # 对齐器裁剪盒 单位: m
+    crop_box.min: [0.150, 0.150, -0.2]
+    crop_box.max: [26.0, 14.850, 1.500]
+    # 最大对应点距离 单位: m
+    max_corr_dist: 0.5
+    # 最大迭代次数
+    max_iteration: 20
+    # 启用预选择点
+    use_preselect: False
+    # 启动时手动对齐
+    startup_manual_align: False
+
+    # 对齐模型: pointcloud, mesh
+    align_model: "mesh"
+    mesh: "23_bg2align.stl"
+

@@ -1,0 +1,32 @@
+# 编译生成的文件夹
+build/
+devel/
+install/
+log/
+
+# ROS 日志和数据文件
+*.bag
+*.log
+*.pcap
+*.pcd
+*.bin
+*.db3
+
+# 动态链接库
+*.so
+*.so.*
+
+# Python 编译产物
+__pycache__/
+*.pyc
+
+# 编辑器临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 大文件/测试数据
+# test_data/
+# radar_model.pt
+.vscode/

@@ -1,0 +1,135 @@
+/radar/pc_aligner:
+  ros__parameters:
+    sample_lidar: 'lidar_mid70'
+    # 初始化采样点云数目
+    init_sample: 1000000
+    # 对齐器采样模型点数
+    mesh_sample: 1000000
+    # 对齐器裁剪盒 单位: m
+    crop_box.min: [0.5, 0.150, -0.2]
+    crop_box.max: [27.5, 14.850, 1.5]
+    # 最大对应点距离 单位: m
+    max_corr_dist: 0.5
+    # 最大迭代次数
+    max_iteration: 20
+    # TF 续发周期：缩短缓存边界，降低extrapolation风险
+    tf_pub_interval_ms: 100
+    # 质量门槛：最小拟合率
+    quality_gate.enable: True
+    quality_gate.max_rmse: 0.24
+    quality_gate.min_fitness: 0.70
+    # 启用预选择点
+    use_preselect: False
+    # 启动时手动对齐
+    startup_manual_align: True
+
+    vis_auto: False
+
+    manual_crop.min: [0., -10., -10.]
+    manual_crop.max: [30., 15., 10.]
+
+    align_model: "mesh"
+    mesh: "rm_2026_19M.stl"
+    mesh_scale: 0.00096
+
+/radar/hik_6mm/hik_camera:
+  ros__parameters:
+    sn: "DB0108949"
+    camera_info_url: "package://hik_camera/config/6mm.yaml"
+    exposure_time: 10000.0
+    gain: 23.0
+    digital_shift: 1.0
+    frame_rate: 60.0
+    fps_log_period_sec: 5.0
+    use_sensor_data_qos: true
+
+/radar/rm_radar_pipeline:
+  ros__parameters:
+    image_topic: "hik_6mm/image"
+    camera_info_topic: "hik_6mm/camera_info"
+    pointcloud_topic: "lidar_mid70/pc_raw"
+    armor_model_path: "/home/ajian/clear_radar-main/src/nn_detector/models/armor_v8.onnx"
+    camera_frame: "hik_6mm_frame"
+    lidar_frame: "lidar_mid70_frame"
+    world_frame: "world"
+    sync_queue_size: 4
+    publish_tentative_tracks: false
+    tracker_observation_noise_xy: 0.36
+    tracker_observation_noise_z: 0.28
+    tracker_init_thresh: 2
+    tracker_miss_thresh: 10
+    tracker_max_acceleration: 4.0
+    tracker_acceleration_correlation_time: 0.6
+    tracker_distance_weight: 0.55
+    tracker_feature_weight: 0.45
+    tracker_distance_thresh: 1.1
+    tracker_hard_match_distance: 2.4
+    tracker_static_smooth_max_speed: 0.25
+    tracker_static_smooth_radius: 0.45
+    tracker_static_smooth_alpha: 0.25
+    uav_detection_enabled: false
+    visualization_enabled: true
+    visualization_imshow: false
+    visualization_window_width: 1280
+    visualization_window_height: 720
+    enemy_outpost_detection_enabled: true
+    enemy_outpost_x: 17.581
+    enemy_outpost_y: 11.902
+    enemy_outpost_z_min: 5.71
+    enemy_outpost_z_max: 11.10
+    enemy_outpost_bar_width: 24
+    enemy_outpost_alive_topic: "judge/enemy_outpost_alive"
+    enemy_outpost_min_light_pixels: 30
+    enemy_outpost_min_light_ratio: 0.001
+    enemy_outpost_min_saturation: 80
+    enemy_outpost_min_value: 160
+    # Locator点云定位参数：距离单位为mm，queue_size为积分帧数
+    locator_queue_size: 3
+    locator_min_depth_diff: 500.0
+    locator_max_depth_diff: 4000.0
+    locator_cluster_tolerance: 400.0
+    locator_min_cluster_size: 8
+    locator_max_cluster_size: 1000
+    locator_max_distance: 29300.0
+    sentry_targets_enabled: true
+    sentry_targets_topic: "judge/sentry_targets"
+    sentry_targets_timeout_ms: 500
+    sentry_targets_max_count: 6
+    sentry_targets_match_dist: 1.0
+    default_team_color: blue
+    enemy_lost_mark_enabled: true
+    enemy_lost_mark_rect_min_x: 6.0
+    enemy_lost_mark_rect_min_y: 10.0
+    enemy_lost_mark_rect_max_x: 11.5
+    enemy_lost_mark_rect_max_y: 14.0
+    enemy_lost_mark_x: 4.0
+    enemy_lost_mark_y: 14.0
+    enemy_lost_mark_radius: 1.5
+    enemy_lost_mark_hold_ms: 1500
+    min_publish_confidence: 0.0
+    car_confidence_threshold: 0.25
+    armor_confidence_threshold: 0.25
+    nms_threshold: 0.65
+
+/radar/multiplexer:
+  ros__parameters:
+    default_team_color: blue
+    match_send_interval: 10
+    detected_hold_sec: 0.5
+    hold_guard_dist: 0.35
+
+/radar/judge_bridge:
+  ros__parameters:
+    enable_recorder: True
+    sentry_send_interval_ms: 50
+    sentry_target_base_id: 800000
+    sentry_target_default_z: 0.8
+    sentry_target_max_count: 6
+    sentry_target_max_abs_xy: 100.0
+    sentry_detected_targets_topic: "/radar/rm_radar_pipeline/detected_targets"
+
+/radar/lidar_mid70/livox_v1_lidar:
+  ros__parameters:
+    local_ip: '192.168.1.50'
+    dest_ip: '192.168.1.136'
+    udp_port: 50010

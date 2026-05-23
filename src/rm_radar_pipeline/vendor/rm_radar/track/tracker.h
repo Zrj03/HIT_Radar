@@ -1,0 +1,64 @@
+/**
+ * @file tracker.h
+ * @author zmsbruce (zmsbruce@163.com)
+ * @brief This is a header file containing the definition of the Tracker class,
+ * which is responsible for managing and updating a set of tracks based on
+ * observations of robots, and its functions.
+ * @date 2024-04-10
+ *
+ * @copyright (c) 2024 HITCRT
+ * All rights reserved.
+ *
+ */
+
+#pragma once
+
+#include <vector>
+
+#include "robot/robot.h"
+#include "track.h"
+
+namespace radar {
+
+class Tracker {
+   public:
+    Tracker(const cv::Point3f& observation_noise, int class_num,
+            int init_thresh = 4, int miss_thresh = 10,
+            float max_acceleration = 2.0f,
+            float acceleration_correlation_time = 1.0f,
+            float distance_weight = 0.40f, float feature_weight = 0.60f,
+            int max_iter = 100, float distance_thresh = 0.8f,
+            float hard_match_distance = 2.4f,
+            float static_smooth_max_speed = 0.12f,
+            float static_smooth_radius = 0.18f,
+            float static_smooth_alpha = 0.55f);
+
+    void update(
+        std::vector<Robot>& robots,
+        const std::chrono::high_resolution_clock::time_point& timestamp);
+
+   private:
+    float calculateCost(const Track& track, const Robot& robot);
+
+    static float calculateDistance(const cv::Point3f& p1,
+                                   const cv::Point3f& p2);
+
+    const int class_num_;
+    const int init_thresh_;
+    const int miss_thresh_;
+    const float max_acc_;
+    const float tau_;
+    float distance_weight_;
+    float feature_weight_;
+    const cv::Point3f measurement_noise_;
+    std::vector<Track> tracks_;
+    const int max_iter_;
+    const float distance_thresh_;
+    const float hard_match_distance_;
+    const float static_smooth_max_speed_;
+    const float static_smooth_radius_;
+    const float static_smooth_alpha_;
+    int latest_id_ = 0;
+};
+
+}  // namespace radar

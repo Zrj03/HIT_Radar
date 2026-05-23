@@ -1,0 +1,5 @@
+uint16 opponent_hero_bullet
+uint16 opponent_infantry_3_bullet
+uint16 opponent_infantry_4_bullet
+uint16 opponent_aerial_bullet
+uint16 opponent_sentry_bullet

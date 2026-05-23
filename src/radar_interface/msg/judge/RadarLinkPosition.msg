@@ -1,0 +1,12 @@
+uint16 opponent_hero_position_x
+uint16 opponent_hero_position_y
+uint16 opponent_engineer_position_x
+uint16 opponent_engineer_position_y
+uint16 opponent_infantry_3_position_x
+uint16 opponent_infantry_3_position_y
+uint16 opponent_infantry_4_position_x
+uint16 opponent_infantry_4_position_y
+uint16 opponent_aerial_position_x
+uint16 opponent_aerial_position_y
+uint16 opponent_sentry_position_x
+uint16 opponent_sentry_position_y

@@ -1,0 +1,6 @@
+uint16 opponent_hero_hp
+uint16 opponent_engineer_hp
+uint16 opponent_infantry_3_hp
+uint16 opponent_infantry_4_hp
+uint16 reserved
+uint16 opponent_sentry_hp

@@ -1,0 +1,10 @@
+/compressed_image:
+  history: keep_last
+  depth: 10
+  reliability: reliable
+  durability: volatile
+/livox/lidar:
+  history: keep_last
+  depth: 10
+  reliability: reliable
+  durability: volatile
