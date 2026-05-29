@@ -5,23 +5,30 @@
     init_sample: 1000000
     # 对齐器采样模型点数
     mesh_sample: 1000000
+    # 自动配准预处理：按角度栅格保留每个方向最远点，参考 T-DT_Radar localization
+    auto_align.use_angular_farthest: True
+    auto_align.angular_grid_deg: 0.1
+    # PCD地图自动配准：角度最远点 -> ROI -> 0.1m 体素降采样 -> GICP
+    auto_align.voxel_size: 0.1
+    auto_align.backend: "pcl_gicp"
+    auto_align.flatten_z: True
     # 对齐器裁剪盒 单位:m（适配场地）
     crop_box.min: [0., -20., -2.] # [0., 0., -5.]
     crop_box.max: [28., 20., 3.] #[30., 15., 5.]
     # 最大对应点距离 单位: m
-    max_corr_dist: 0.5
+    max_corr_dist: 5.0
     # 最大迭代次数
-    max_iteration: 20
+    max_iteration: 50
     # TF 续发周期：缩短缓存边界，降低extrapolation风险
     tf_pub_interval_ms: 100
     # 质量门槛：最小拟合率
     quality_gate.enable: True
-    quality_gate.max_rmse: 0.24
+    quality_gate.max_rmse: 0.45
     quality_gate.min_fitness: 0.70
     # 启用预选择点
     use_preselect: False
-    # 启动时手动对齐
-    startup_manual_align: True
+    # 启动时跳过点云手动选点，直接使用自动配准
+    startup_manual_align: False
 
     vis_auto: False
 
@@ -29,8 +36,13 @@
     manual_crop.min: [0., -20., -2.]
     manual_crop.max: [28., 20., 3.]
 
-    align_model: "mesh"
-    mesh: "home_demo.stl"
+    align_model: "pointcloud"
+    pointcloud: "home_demo.pcd"
+    pointcloud_scale: 0.001
+    # home_demo.pcd: x为场地宽边、y为场地长边；转到程序坐标 x=长边, y=宽边
+    pointcloud_yaw: -1.57079632679
+    pointcloud_translation: [0.0, 15.0, 0.0]
+    mesh: "home_demo2.stl"
     # STL模型缩放参数（STL单位mm→目标单位m）
     mesh_scale: 0.001
 
@@ -38,12 +50,33 @@
   ros__parameters:
     sn: "DB0108949"
     camera_info_url: "package://hik_camera/config/6mm.yaml"
-    exposure_time: 10000.0
+    exposure_time: 8000.0
     gain: 23.0
     digital_shift: 1.0
-    frame_rate: 60.0
+    frame_rate: 40.0
     fps_log_period_sec: 5.0
     use_sensor_data_qos: true
+
+/radar/camera_extrinsic_tuner:
+  ros__parameters:
+    image_topic: "/radar/hik_6mm/image"
+    compressed_image_topic: "/radar/hik_6mm/image/compressed"
+    camera_info_topic: "/radar/hik_6mm/camera_info"
+    world_frame: "world"
+    lidar_frame: "lidar_mid70_frame"
+    camera_frame: "hik_6mm_frame"
+    calibration_file: "/home/ajian/clear_radar-main/src/radar_bringup/config/calibration.yaml"
+    # T-DT相机手动配准点，按点击顺序对应下方名称；home坐标系使用 y = T-DT_y + 15
+    calibration_point_names: ["self_fortress", "self_tower", "enemy_base", "enemy_tower", "enemy_high"]
+    calibration_points: [
+      5.471, 7.5, 0.0,
+      10.936, 3.839, 0.868,
+      25.49, 7.5, 1.24524,
+      16.925, 11.375, 1.745,
+      20.20, 4.2, 0.8
+    ]
+    auto_save: true
+    broadcast_tf: true
 
 /radar/rm_radar_pipeline:
   ros__parameters:
@@ -56,6 +89,16 @@
     world_frame: "world"
     sync_queue_size: 4
     publish_tentative_tracks: false
+    camera_fallback_enabled: true
+    camera_fallback_hold_ms: 500
+    camera_fallback_min_confidence: 0.45
+    camera_fallback_ground_z: 0.0
+    camera_fallback_pixel_y_ratio: 0.85
+    camera_fallback_min_x: 0.0
+    camera_fallback_max_x: 28.0
+    camera_fallback_min_y: -20.0
+    camera_fallback_max_y: 20.0
+    camera_fallback_max_range: 30.0
 
     tracker_observation_noise_xy: 0.36
     tracker_observation_noise_z: 0.28
@@ -72,7 +115,7 @@
     tracker_static_smooth_alpha: 0.25
 
     # 无人机检测
-    uav_detection_enabled: true
+    uav_detection_enabled: false
 
     visualization_enabled: true
     visualization_imshow: false
@@ -114,6 +157,10 @@
     sentry_blind_guess_red_base_max_x: 4.0
     sentry_blind_guess_base_min_y: 4.0
     sentry_blind_guess_base_max_y: 10.5
+    
+    hero_lob_guess_enabled: true
+    hero_lob_guess_switch_interval_ms: 500
+    hero_lob_guess_radius_m: 0.3
     default_team_color: blue
     
     enemy_lost_mark_enabled: true
@@ -150,6 +197,8 @@
     sentry_target_max_count: 6
     sentry_target_max_abs_xy: 100.0
     sentry_detected_targets_topic: "/radar/rm_radar_pipeline/detected_targets"
+    sentry_uav_target_topic: "/radar/uav_target"
+    sentry_uav_target_timeout_ms: 500
 
 /radar/lidar_mid70/livox_v1_lidar:
   ros__parameters:

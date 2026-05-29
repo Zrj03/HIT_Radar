@@ -5,30 +5,47 @@
     init_sample: 1000000
     # 对齐器采样模型点数
     mesh_sample: 1000000
+    # 自动配准预处理：按角度栅格保留每个方向最远点，参考 T-DT_Radar localization
+    auto_align.use_angular_farthest: True
+    auto_align.angular_grid_deg: 0.1
+    # T-DT_Radar 风格自动配准：角度最远点 -> ROI -> 0.1m 体素降采样 -> GICP
+    auto_align.voxel_size: 0.1
+    auto_align.backend: "pcl_gicp"
+    auto_align.flatten_z: False
     # 对齐器裁剪盒 单位: m
-    crop_box.min: [0.5, 0.150, -0.2]
-    crop_box.max: [27.5, 14.850, 1.5]
+    crop_box.min: [5.0, -10.0, -5.0]
+    crop_box.max: [30.0, 8.0, 7.0]
     # 最大对应点距离 单位: m
-    max_corr_dist: 0.5
+    max_corr_dist: 3.5
     # 最大迭代次数
-    max_iteration: 20
+    max_iteration: 65
     # TF 续发周期：缩短缓存边界，降低extrapolation风险
     tf_pub_interval_ms: 100
     # 质量门槛：最小拟合率
     quality_gate.enable: True
-    quality_gate.max_rmse: 0.24
+    quality_gate.max_rmse: 0.45
     quality_gate.min_fitness: 0.70
+
+    # Initial lidar->middle guess from measured national stand pose:
+    # world lidar pose ~= [x=0.0, y=7.5, z=3.985], yaw=0 (facing +X).
+    init_trans: [0.0, -8.0, -3.985, 1.0, 0.0, 0.0, 0.0]
+
     # 启用预选择点
     use_preselect: False
-    # 启动时手动对齐
-    startup_manual_align: True
+    # 启动时跳过点云手动选点，直接使用自动配准
+    startup_manual_align: False
 
     vis_auto: False
 
-    manual_crop.min: [0., -10., -10.]
-    manual_crop.max: [30., 15., 10.]
+    manual_crop.min: [0., -1., -2.]
+    manual_crop.max: [28., 16., 3.]
 
-    align_model: "mesh"
+    align_model: "pointcloud"
+    pointcloud: "RM2026.pcd"
+    # RM2026.pcd原始跨度约291.5 x 160.5 x 36.98，缩放0.1后对应29.15m x 16.05m x 3.70m
+    pointcloud_scale: 0.1
+    pointcloud_yaw: 0.0
+    pointcloud_translation: [14.575, -1.624340057, 1.841340065]
     mesh: "rm_2026_19M.stl"
     mesh_scale: 0.00096
 
@@ -36,12 +53,32 @@
   ros__parameters:
     sn: "DB0108949"
     camera_info_url: "package://hik_camera/config/6mm.yaml"
-    exposure_time: 10000.0
-    gain: 23.0
+    exposure_time: 8000.0
+    gain: 20.0
     digital_shift: 1.0
-    frame_rate: 60.0
+    frame_rate: 40.0
     fps_log_period_sec: 5.0
     use_sensor_data_qos: true
+
+/radar/camera_extrinsic_tuner:
+  ros__parameters:
+    image_topic: "/radar/hik_6mm/image"
+    compressed_image_topic: "/radar/hik_6mm/image/compressed"
+    camera_info_topic: "/radar/hik_6mm/camera_info"
+    world_frame: "world"
+    lidar_frame: "lidar_mid70_frame"
+    camera_frame: "hik_6mm_frame"
+    calibration_file: "/home/ajian/clear_radar-main/src/radar_bringup/config/calibration.yaml"
+    calibration_point_names: ["self_fortress", "self_tower", "enemy_base", "enemy_tower", "enemy_high"]
+    calibration_points: [
+      5.471, 7.5, 0.0,
+      10.936, 3.839, 0.868,
+      25.49, 7.5, 1.24524,
+      16.925, 11.375, 1.745,
+      20.20, 4.2, 0.8
+    ]
+    auto_save: true
+    broadcast_tf: true
 
 /radar/rm_radar_pipeline:
   ros__parameters:
@@ -52,26 +89,40 @@
     camera_frame: "hik_6mm_frame"
     lidar_frame: "lidar_mid70_frame"
     world_frame: "world"
-    sync_queue_size: 4
+    sync_queue_size: 6
     publish_tentative_tracks: false
+
+    camera_fallback_enabled: true
+    camera_fallback_hold_ms: 500
+    camera_fallback_min_confidence: 0.45
+    camera_fallback_ground_z: 0.0
+    camera_fallback_pixel_y_ratio: 0.85
+    camera_fallback_min_x: 0.0
+    camera_fallback_max_x: 28.0
+    camera_fallback_min_y: -20.0
+    camera_fallback_max_y: 20.0
+    camera_fallback_max_range: 30.0
+
     tracker_observation_noise_xy: 0.36
     tracker_observation_noise_z: 0.28
     tracker_init_thresh: 2
     tracker_miss_thresh: 10
-    tracker_max_acceleration: 4.0
+    tracker_max_acceleration: 6.0
     tracker_acceleration_correlation_time: 0.6
     tracker_distance_weight: 0.55
     tracker_feature_weight: 0.45
-    tracker_distance_thresh: 1.1
-    tracker_hard_match_distance: 2.4
+    tracker_distance_thresh: 1.3
+    tracker_hard_match_distance: 2.7
     tracker_static_smooth_max_speed: 0.25
     tracker_static_smooth_radius: 0.45
     tracker_static_smooth_alpha: 0.25
-    uav_detection_enabled: false
+
+    uav_detection_enabled: true
     visualization_enabled: true
     visualization_imshow: false
     visualization_window_width: 1280
     visualization_window_height: 720
+
     enemy_outpost_detection_enabled: true
     enemy_outpost_x: 17.581
     enemy_outpost_y: 11.902
@@ -83,19 +134,72 @@
     enemy_outpost_min_light_ratio: 0.001
     enemy_outpost_min_saturation: 80
     enemy_outpost_min_value: 160
+
     # Locator点云定位参数：距离单位为mm，queue_size为积分帧数
     locator_queue_size: 3
     locator_min_depth_diff: 500.0
     locator_max_depth_diff: 4000.0
-    locator_cluster_tolerance: 400.0
-    locator_min_cluster_size: 8
+    locator_cluster_tolerance: 500.0
+    locator_min_cluster_size: 6
     locator_max_cluster_size: 1000
     locator_max_distance: 29300.0
+    
+    locator_adaptive_cluster_enabled: true
+    locator_near_distance: 10000.0
+    locator_mid_distance: 18000.0
+    locator_near_cluster_tolerance: 400.0
+    locator_mid_cluster_tolerance: 550.0
+    locator_far_cluster_tolerance: 750.0
+    locator_near_min_cluster_size: 8
+    locator_mid_min_cluster_size: 6
+    locator_far_min_cluster_size: 4
+
     sentry_targets_enabled: true
     sentry_targets_topic: "judge/sentry_targets"
     sentry_targets_timeout_ms: 500
     sentry_targets_max_count: 6
-    sentry_targets_match_dist: 1.0
+    sentry_targets_match_dist: 0.5
+    sentry_blind_guess_enabled: true
+    sentry_blind_guess_mark_topic: "judge/radar_mark_data"
+    sentry_blind_guess_switch_interval_ms: 500
+    sentry_blind_guess_blue_base_min_x: 24.0
+    sentry_blind_guess_blue_base_max_x: 28.5
+    sentry_blind_guess_red_base_min_x: 0.0
+    sentry_blind_guess_red_base_max_x: 4.0
+    sentry_blind_guess_base_min_y: 4.0
+    sentry_blind_guess_base_max_y: 10.5
+
+    hero_lob_guess_enabled: true
+    hero_lob_guess_switch_interval_ms: 500
+    hero_lob_guess_radius_m: 0.3
+
+    fixed_enemy_guess_enabled: false
+    fixed_enemy_guess_engineer_x: 18.19
+    fixed_enemy_guess_engineer_y: 13.33
+    fixed_enemy_guess_hero_x: 23.87
+    fixed_enemy_guess_hero_y: 3.10
+    enemy_region_guess_enabled: true
+    enemy_region_guess_switch_interval_ms: 500
+    enemy_region_guess_engineer_x: 15.36
+    enemy_region_guess_engineer_y: 7.27
+    enemy_region_guess_engineer_radius_m: 0.5
+    enemy_region_guess_polygon: [
+      9.48, 9.08,
+      8.77, 10.65,
+      12.66, 15.0,
+      11.5, 14.0
+    ]
+    enemy_region_guess_priority_point: [12.66, 15.0]
+    corridor_guess_enabled: true
+    corridor_guess_switch_interval_ms: 500
+    corridor_guess_early_duration_ms: 120000
+    corridor_guess_late_duration_ms: 300000
+    corridor_guess_start: [3.39, 1.65]
+    corridor_guess_end: [9.81, 1.67]
+    corridor_guess_radius_m: 0.5
+    # Slots: 0=sentry(7), 1=hero(1), 2=engineer(2), 3=infantry3, 4=infantry4, 5=infantry5/aerial.
+    corridor_guess_early_slots: [2, 3, 4]
+
     default_team_color: blue
     enemy_lost_mark_enabled: true
     enemy_lost_mark_rect_min_x: 6.0
@@ -106,6 +210,7 @@
     enemy_lost_mark_y: 14.0
     enemy_lost_mark_radius: 1.5
     enemy_lost_mark_hold_ms: 1500
+
     min_publish_confidence: 0.0
     car_confidence_threshold: 0.25
     armor_confidence_threshold: 0.25
@@ -115,11 +220,12 @@
   ros__parameters:
     default_team_color: blue
     match_send_interval: 10
-    detected_hold_sec: 0.5
-    hold_guard_dist: 0.35
+    detected_hold_sec: 0.6
+    hold_guard_dist: 0.6
 
 /radar/judge_bridge:
   ros__parameters:
+    serial_port: "/dev/Referee_System"
     enable_recorder: True
     sentry_send_interval_ms: 50
     sentry_target_base_id: 800000
@@ -127,6 +233,8 @@
     sentry_target_max_count: 6
     sentry_target_max_abs_xy: 100.0
     sentry_detected_targets_topic: "/radar/rm_radar_pipeline/detected_targets"
+    sentry_uav_target_topic: "/radar/uav_target"
+    sentry_uav_target_timeout_ms: 500
 
 /radar/lidar_mid70/livox_v1_lidar:
   ros__parameters:

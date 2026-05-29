@@ -24,6 +24,7 @@
 #include <opencv2/opencv.hpp>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "robot/robot.h"
 
@@ -62,7 +63,16 @@ class Locator {
             size_t queue_size = 3, float min_depth_diff = 500,
             float max_depth_diff = 4000, float cluster_tolerance = 400,
             int min_cluster_size = 8, int max_cluster_size = 1000,
-            float max_distance = 29300);
+            float max_distance = 29300,
+            bool adaptive_cluster = false,
+            float near_distance = 10000,
+            float mid_distance = 18000,
+            float near_cluster_tolerance = 400,
+            float mid_cluster_tolerance = 550,
+            float far_cluster_tolerance = 750,
+            int near_min_cluster_size = 8,
+            int mid_min_cluster_size = 6,
+            int far_min_cluster_size = 4);
 
     void update(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) noexcept;
 
@@ -87,6 +97,10 @@ class Locator {
     cv::Matx44f camera_to_world_transform_;
     float min_depth_diff_, max_depth_diff_;
     float max_distance_;
+    bool adaptive_cluster_;
+    float near_distance_, mid_distance_;
+    float near_cluster_tolerance_, mid_cluster_tolerance_, far_cluster_tolerance_;
+    int near_min_cluster_size_, mid_min_cluster_size_, far_min_cluster_size_;
     cv::Mat depth_image_, background_depth_image_, diff_depth_image_;
     std::deque<cv::Mat> depth_images_;
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> cluster_extractor_;

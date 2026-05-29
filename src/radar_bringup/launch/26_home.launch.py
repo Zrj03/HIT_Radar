@@ -6,12 +6,13 @@ from tf2_geometry_msgs.tf2_geometry_msgs import _get_quat_from_mat, _build_affin
 from launch_ros.descriptions import ComposableNode
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch.actions import DeclareLaunchArgument, TimerAction, Shutdown
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch import LaunchDescription
 
 import numpy as np
 import os
+import re
 
 # 调试开关：设置为 True 时将不使用容器组合方式，便于单节点调试
 debug = False
@@ -51,7 +52,24 @@ def get_xyzw_tf_broadcaster(cali: list, fr: str, child_fr: str):
                    '--child-frame-id', child_fr],)
 
 
-def get_matrix_tf_broadcaster(cali: np.array, fr: str, child_fr: str):
+def load_lidar_to_camera_matrix():
+    calibration_path = os.path.join(
+        get_package_share_directory('radar_bringup'),
+        'config',
+        'calibration.yaml'
+    )
+    with open(calibration_path, 'r', encoding='utf-8') as f:
+        text = f.read()
+    match = re.search(r'lidar_to_camera:.*?data:\s*\[(.*?)\]', text, re.S)
+    if not match:
+        raise RuntimeError(f'Cannot find lidar_to_camera in {calibration_path}')
+    values = [float(v) for v in re.split(r'[,\s]+', match.group(1).strip()) if v]
+    if len(values) != 16:
+        raise RuntimeError(f'lidar_to_camera in {calibration_path} must contain 16 values')
+    return np.array(values, dtype=float).reshape((4, 4))
+
+
+def get_matrix_tf_broadcaster(cali: np.array, fr: str, child_fr: str, condition=None):
     """
     接受 4x4 仿射矩阵（numpy array），分解为平移和四元数后发布静态 TF。
     参数:
@@ -75,7 +93,9 @@ def get_matrix_tf_broadcaster(cali: np.array, fr: str, child_fr: str):
                    '--qy', str(quat[2]),
                    '--qz', str(quat[3]),
                    '--frame-id', fr,
-                   '--child-frame-id', child_fr],)
+                   '--child-frame-id', child_fr],
+        output='log',
+        condition=condition,)
 
 
 def get_vision_container(cam_name: str, sn: str, camera_info_url: str):
@@ -107,7 +127,7 @@ def get_vision_container(cam_name: str, sn: str, camera_info_url: str):
                         extra_arguments=[{'use_intra_process_comms': True}]
                     ),
                 ],
-                output='both',
+                output='log',
                 emulate_tty=True,
                 on_exit=Shutdown(),
             ),)
@@ -146,7 +166,7 @@ def get_pc_container():
                         extra_arguments=[{'use_intra_process_comms': False}]
                     ),
                 ],
-                output='both',
+                output='log',
                 emulate_tty=True,
                 on_exit=Shutdown(),
             ),)
@@ -171,31 +191,47 @@ def generate_launch_description():
     - 新识别定位跟踪节点 (`rm_radar_pipeline`)
     - 一些静态 TF 发布器（相机到雷达的外参等）
     33  
-    - `pc_aligner`：点云对齐（手动对齐模式）
+    - `pc_aligner`：点云自动对齐
     - 可视化与结果输出：`marker_pub`, `foxglove_bridge`
-    注意：在 home 模式下默认启用手动配准（由 `pc_aligner` 提供），不会自动加载比赛场地的 6 点标定。
+    注意：点云场地配准默认自动运行；相机外参使用上方静态 TF，对应人工标定后的结果。
     如果回放赛事 rosbag，请使用 `use_sim_time:=true` 参数并播放 bag 时带 `--clock`。
     """
+    enable_judge_bridge = LaunchConfiguration('enable_judge_bridge')
     enable_gimbal_serial = LaunchConfiguration('enable_gimbal_serial')
+    enable_camera_extrinsic_tuner = LaunchConfiguration('enable_camera_extrinsic_tuner')
 
     return LaunchDescription([
         DeclareLaunchArgument(
+            'enable_judge_bridge',
+            default_value='true',
+            description='Whether to launch judge_bridge (requires /dev/Referee_System)'
+        ),
+        DeclareLaunchArgument(
             'enable_gimbal_serial',
             default_value='true',
-            description='Whether to launch gimbal_serial (requires /dev/ttyACM0)'
+            description='Whether to launch gimbal_serial (requires /dev/radar)'
+        ),
+        DeclareLaunchArgument(
+            'enable_camera_extrinsic_tuner',
+            default_value='false',
+            description='Launch T-DT style camera extrinsic tuner and disable static lidar->camera TF'
         ),
         *get_vision_container(
             'hik_6mm', 'DB0108949', 'package://hik_camera/config/6mm.yaml'),
-        get_xyzw_tf_broadcaster(
-            [
-                -0.09587708690877395,
-                1.622732820680712,
-                -0.29852615824253836,
-                0.4361627116514627,
-                -0.5283868358179163,
-                0.5414874766958677,
-                -0.48719683217434323
-            ], 'lidar_mid70_frame', 'hik_6mm_frame'
+        Node(
+            package='radar_utils',
+            executable='camera_extrinsic_tuner',
+            name='camera_extrinsic_tuner',
+            namespace='radar',
+            condition=IfCondition(enable_camera_extrinsic_tuner),
+            parameters=[node_params],
+            output='both',
+        ),
+        get_matrix_tf_broadcaster(
+            load_lidar_to_camera_matrix(),
+            'lidar_mid70_frame',
+            'hik_6mm_frame',
+            condition=UnlessCondition(enable_camera_extrinsic_tuner)
         ),
         *get_pc_container(),
         Node(
@@ -203,7 +239,7 @@ def generate_launch_description():
             executable='marker_pub',
             namespace='radar',
             parameters=[{"mesh": "home_demo.stl"}],
-            output='both',
+            output='log',
         ),
         Node(
             package='pc_aligner',
@@ -218,52 +254,57 @@ def generate_launch_description():
             name='rm_radar_pipeline',
             namespace='radar',
             parameters=[node_params],
-            output='both',
+            output='log',
         ),
         Node(
             package='target_multiplexer',
             executable='target_multiplexer',
             namespace='radar',
             parameters=[node_params],
-            output='both',
+            output='log',
         ),
         Node(
             package='dv_trigger',
             executable='dv_trigger',
             namespace='radar',
             parameters=[node_params],
-            output='both',
+            output='log',
         ),
-        # # judge_bridge 有串口依赖，若无裁判系统请注释此节点
-        # Node(
-        #     package='judge_bridge',
-        #     executable='judge_bridge',
-        #     namespace='radar',
-        #     parameters=[node_params],
-        #     output='both',
-        # ),
+        
+        # judge_bridge 有裁判系统串口依赖，默认启用；需要关闭时传 enable_judge_bridge:=false
+        Node(
+            package='judge_bridge',
+            executable='judge_bridge',
+            name='judge_bridge',
+            namespace='radar',
+            condition=IfCondition(enable_judge_bridge),
+            parameters=[node_params],
+            output='log',
+        ),
+
         # Foxglove bridge disabled.
         # Node(
         #     package='foxglove_bridge',
         #     executable='foxglove_bridge',
         # ),
+
         Node(
             package='target_visualizer',
             executable='rm_radar_image_visualizer',
             namespace='radar',
-            output='both',
+            output='log',
         ),
         Node(
             package='result_visualizer',
             executable='result_visualizer',
             namespace='radar',
-            output='both',
+            output='log',
         ),
         Node(
             package='radar_utils',
             executable='camera_param_tuner',
             name='camera_param_tuner',
-            output='both',
+            output='log',
         ),
         # Gimbal Serial node：接收/radar/uav_target并通过串口控制云台
         Node(
@@ -271,10 +312,11 @@ def generate_launch_description():
             executable='gimbal_serial',
             name='gimbal_serial',
             condition=IfCondition(enable_gimbal_serial),
-            output='both',
+            output='log',
             parameters=[
                 {'port': '/dev/radar'},
                 {'baud': 115200},
+                {'target_y_offset': -0.5},
             ],
         ),
     ])

@@ -1,6 +1,7 @@
 #include "pc_aligner/aligner_node.hpp"
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <open3d/geometry/PointCloud.h>
@@ -20,6 +21,11 @@ AlignerNode::AlignerNode() : Node("pc_aligner")
     declare_parameter("startup_manual_align", false);
 
     declare_parameter("mesh_sample", 10000);
+    declare_parameter("auto_align.use_angular_farthest", false);
+    declare_parameter("auto_align.angular_grid_deg", 0.1);
+    declare_parameter("auto_align.voxel_size", 0.0);
+    declare_parameter("auto_align.backend", "open3d_gicp");
+    declare_parameter("auto_align.flatten_z", false);
     // 默认场地大小为 28 * 15(m)
     declare_parameter("crop_box.min", std::vector<double> { 0.150, 0.150, 0. });
     declare_parameter("crop_box.max", std::vector<double> { 27.850, 14.850, 1.500 });
@@ -37,6 +43,9 @@ AlignerNode::AlignerNode() : Node("pc_aligner")
     declare_parameter("mesh", "bg2align.stl");
     declare_parameter("mesh_scale", 0.001);
     declare_parameter("pointcloud", "bg2align.pcd");
+    declare_parameter("pointcloud_scale", 1.0);
+    declare_parameter("pointcloud_yaw", 0.0);
+    declare_parameter("pointcloud_translation", std::vector<double> {0.0, 0.0, 0.0});
 
     declare_parameter("manual_crop.min", std::vector<double> { 0, -15., -15. });
     declare_parameter("manual_crop.max", std::vector<double> { 25., 15., 15. });
@@ -176,8 +185,8 @@ void AlignerNode::prepare_meshes()
     std::string align_model = get_parameter("align_model").as_string();
     std::filesystem::path meshes_path = std::filesystem::path(ament_index_cpp::get_package_share_directory("radar_bringup")) / "resource";
 
-    RCLCPP_INFO(get_logger(), "align model: %s", align_model.c_str());
-    RCLCPP_INFO(get_logger(), "meshes path: %s", meshes_path.c_str());
+    RCLCPP_DEBUG(get_logger(), "align model: %s", align_model.c_str());
+    RCLCPP_DEBUG(get_logger(), "meshes path: %s", meshes_path.c_str());
     if (align_model == "mesh") {
         align_using_mesh = true;
         const double mesh_scale = get_parameter("mesh_scale").as_double();
@@ -188,13 +197,58 @@ void AlignerNode::prepare_meshes()
     } else if (align_model == "pointcloud") {
         align_using_mesh = false;
         pc_align = open3d::io::CreatePointCloudFromFile(meshes_path / get_parameter("pointcloud").as_string());
-        // pc_align->EstimateNormals();
+        if (!pc_align || pc_align->points_.empty()) {
+            RCLCPP_ERROR(get_logger(), "Failed to load alignment pointcloud: %s",
+                get_parameter("pointcloud").as_string().c_str());
+        } else {
+            const double pointcloud_scale = get_parameter("pointcloud_scale").as_double();
+            if (std::isfinite(pointcloud_scale) && pointcloud_scale > 0.0 && std::abs(pointcloud_scale - 1.0) > 1e-12) {
+                pc_align->Scale(pointcloud_scale, Eigen::Vector3d::Zero());
+                RCLCPP_DEBUG(get_logger(), "Alignment pointcloud scaled by %.6f", pointcloud_scale);
+            }
+            const double pointcloud_yaw = get_parameter("pointcloud_yaw").as_double();
+            auto pointcloud_translation = get_parameter("pointcloud_translation").as_double_array();
+            if (pointcloud_translation.size() != 3) {
+                RCLCPP_WARN(get_logger(), "pointcloud_translation must have 3 values, ignore translation.");
+                pointcloud_translation = {0.0, 0.0, 0.0};
+            }
+            if ((std::isfinite(pointcloud_yaw) && std::abs(pointcloud_yaw) > 1e-12)
+                || std::abs(pointcloud_translation[0]) > 1e-12
+                || std::abs(pointcloud_translation[1]) > 1e-12
+                || std::abs(pointcloud_translation[2]) > 1e-12) {
+                Eigen::Matrix4d map_adjust = Eigen::Matrix4d::Identity();
+                const double c = std::cos(pointcloud_yaw);
+                const double s = std::sin(pointcloud_yaw);
+                map_adjust(0, 0) = c;
+                map_adjust(0, 1) = -s;
+                map_adjust(1, 0) = s;
+                map_adjust(1, 1) = c;
+                map_adjust(0, 3) = pointcloud_translation[0];
+                map_adjust(1, 3) = pointcloud_translation[1];
+                map_adjust(2, 3) = pointcloud_translation[2];
+                pc_align->Transform(map_adjust);
+                RCLCPP_DEBUG(get_logger(),
+                    "Alignment pointcloud adjusted: yaw=%.6f rad, translation=[%.3f, %.3f, %.3f]",
+                    pointcloud_yaw,
+                    pointcloud_translation[0],
+                    pointcloud_translation[1],
+                    pointcloud_translation[2]);
+            }
+            const double voxel_size = get_parameter("auto_align.voxel_size").as_double();
+            if (std::isfinite(voxel_size) && voxel_size > 0.0) {
+                pc_align = pc_align->VoxelDownSample(voxel_size);
+                RCLCPP_DEBUG(get_logger(), "Alignment pointcloud downsampled with voxel %.3f to %zu points",
+                    voxel_size, pc_align->points_.size());
+            } else {
+                RCLCPP_DEBUG(get_logger(), "Alignment pointcloud loaded with %zu points", pc_align->points_.size());
+            }
+        }
     } else {
         RCLCPP_WARN(get_logger(), "Unknown align_model: %s", align_model.c_str());
         align_using_mesh = true;
     }
 
-    RCLCPP_INFO(get_logger(), "meshes prepared");
+    RCLCPP_DEBUG(get_logger(), "meshes prepared");
 }
 
 void AlignerNode::sample_sub_callback(const sensor_msgs::msg::PointCloud2 &msg)
@@ -292,14 +346,14 @@ void AlignerNode::load_calibration_file(const std::string& calibration_file_path
         cv::FileNode camera_intrinsic_node = fs["camera_intrinsic"];
         if (!camera_intrinsic_node.empty()) {
             camera_intrinsic_node >> camera_intrinsic;
-            RCLCPP_INFO(get_logger(), "Camera intrinsic matrix loaded (3x3)");
+            RCLCPP_DEBUG(get_logger(), "Camera intrinsic matrix loaded (3x3)");
         }
 
         // 读取相机畸变系数
         cv::FileNode camera_distortion_node = fs["camera_distortion"];
         if (!camera_distortion_node.empty()) {
             camera_distortion_node >> camera_distortion;
-            RCLCPP_INFO(get_logger(), "Camera distortion coefficients loaded (1x5)");
+            RCLCPP_DEBUG(get_logger(), "Camera distortion coefficients loaded (1x5)");
         }
 
         // 读取外参变换矩阵 (LiDAR -> Camera)
@@ -315,22 +369,22 @@ void AlignerNode::load_calibration_file(const std::string& calibration_file_path
                     lidar_to_camera(i, j) = lidar_to_camera_cv.at<double>(i, j);
                 }
             }
-            RCLCPP_INFO(get_logger(), "LiDAR to Camera transformation matrix loaded (4x4)");
+            RCLCPP_DEBUG(get_logger(), "LiDAR to Camera transformation matrix loaded (4x4)");
             
             // 打印外参矩阵信息
-            RCLCPP_INFO(get_logger(), "LiDAR to Camera extrinsic matrix:");
-            RCLCPP_INFO(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
+            RCLCPP_DEBUG(get_logger(), "LiDAR to Camera extrinsic matrix:");
+            RCLCPP_DEBUG(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
                 lidar_to_camera(0,0), lidar_to_camera(0,1), lidar_to_camera(0,2), lidar_to_camera(0,3));
-            RCLCPP_INFO(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
+            RCLCPP_DEBUG(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
                 lidar_to_camera(1,0), lidar_to_camera(1,1), lidar_to_camera(1,2), lidar_to_camera(1,3));
-            RCLCPP_INFO(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
+            RCLCPP_DEBUG(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
                 lidar_to_camera(2,0), lidar_to_camera(2,1), lidar_to_camera(2,2), lidar_to_camera(2,3));
-            RCLCPP_INFO(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
+            RCLCPP_DEBUG(get_logger(), "[%.6f, %.6f, %.6f | %.6f]", 
                 lidar_to_camera(3,0), lidar_to_camera(3,1), lidar_to_camera(3,2), lidar_to_camera(3,3));
         }
 
         calibration_loaded = true;
-        RCLCPP_INFO(get_logger(), "Calibration file loaded successfully: %s", 
+        RCLCPP_DEBUG(get_logger(), "Calibration file loaded successfully: %s", 
             calibration_file_path.c_str());
 
         fs.release();

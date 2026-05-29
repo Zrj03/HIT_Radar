@@ -73,9 +73,9 @@ int observation_order_offset_from_armor_type(int64_t type)
     case radar_interface::msg::Armor::TYPE_INF_4:
         return 3;
     case radar_interface::msg::Armor::TYPE_INF_5:
-        return -1;
-    case radar_interface::msg::Armor::TYPE_SENTRY:
         return 4;
+    case radar_interface::msg::Armor::TYPE_SENTRY:
+        return 5;
     default:
         return -1;
     }
@@ -525,7 +525,8 @@ void JudgeBridgeNode::detected_targets_callback(const radar_interface::msg::Dete
             continue;
 
         const bool is_opponent = target_color != color.load();
-        const size_t slot_idx = static_cast<size_t>(order_offset + (is_opponent ? 0 : 5));
+        const size_t slot_idx = static_cast<size_t>(
+            order_offset + (is_opponent ? 0 : SENTRY_OBSERVATION_ALLY_OFFSET));
         auto& slot = sentry_observation_slots[slot_idx];
         slot.recognized = true;
         slot.robot_id = clamp_to_i16(detected_target.type);
@@ -536,6 +537,18 @@ void JudgeBridgeNode::detected_targets_callback(const radar_interface::msg::Dete
     RCLCPP_INFO_THROTTLE(
         get_logger(), *get_clock(), 1000,
         "Sentry observation targets recognized and staged for sentry packet.");
+}
+
+void JudgeBridgeNode::uav_target_callback(const geometry_msgs::msg::PointStamped& msg)
+{
+    std::lock_guard<std::mutex> lock(uav_target_mutex);
+    latest_uav_target = msg;
+    if (latest_uav_target.header.stamp.sec == 0 && latest_uav_target.header.stamp.nanosec == 0) {
+        const auto now_ns = now().nanoseconds();
+        latest_uav_target.header.stamp.sec = static_cast<int32_t>(now_ns / 1000000000LL);
+        latest_uav_target.header.stamp.nanosec = static_cast<uint32_t>(now_ns % 1000000000LL);
+    }
+    has_uav_target = true;
 }
 
 robot_interaction_sentry_map_robot_data_t JudgeBridgeNode::build_sentry_map_observation_data(
@@ -566,20 +579,39 @@ robot_interaction_sentry_map_robot_data_t JudgeBridgeNode::build_sentry_map_obse
 
     const auto& opponent_hp = color == team_color::C_RED ? blue_robot_hp : red_robot_hp;
     const auto& ally_hp = color == team_color::C_RED ? red_robot_hp : blue_robot_hp;
-    std::array<SentryObservationSlot, 10> observation_slots {};
+    std::array<SentryObservationSlot, SENTRY_OBSERVATION_SLOT_COUNT> observation_slots {};
     {
         std::lock_guard<std::mutex> lock(sentry_observation_mutex);
         observation_slots = sentry_observation_slots;
     }
 
-    auto fill_robot = [&](size_t out_idx, const auto& hp_values, size_t hp_idx) {
+    {
+        geometry_msgs::msg::PointStamped uav_target;
+        bool uav_target_valid = false;
+        {
+            std::lock_guard<std::mutex> lock(uav_target_mutex);
+            uav_target = latest_uav_target;
+            uav_target_valid = has_uav_target;
+        }
+        const int timeout_ms = get_parameter("sentry_uav_target_timeout_ms").as_int();
+        if (uav_target_valid && timeout_ms >= 0) {
+            const auto target_time = rclcpp::Time(uav_target.header.stamp);
+            if (target_time.nanoseconds() == 0 ||
+                (now() - target_time).nanoseconds() > static_cast<int64_t>(timeout_ms) * 1000 * 1000) {
+                uav_target_valid = false;
+            }
+        }
+        interaction_data.enemy_uav_detected = uav_target_valid;
+    }
+
+    auto fill_robot = [&](size_t out_idx, size_t observation_idx, const auto& hp_values, size_t hp_idx) {
         if (out_idx >= std::size(interaction_data.robots))
             return;
 
         auto& robot = interaction_data.robots[out_idx];
         robot.hp = has_game_robot_hp && hp_idx < hp_values.size() ? hp_values[hp_idx] : UNKNOWN_OBS_VALUE;
 
-        const auto& slot = observation_slots[out_idx];
+        const auto& slot = observation_slots[observation_idx];
         if (!slot.recognized)
             return;
 
@@ -588,11 +620,13 @@ robot_interaction_sentry_map_robot_data_t JudgeBridgeNode::build_sentry_map_obse
         robot.pos_y = clamp_to_i16(std::lround(slot.pos_y * POSITION_SCALE));
     };
 
+    constexpr std::array<size_t, 5> observation_order {0, 1, 2, 3, 5};
     constexpr std::array<size_t, 5> map_hp_order {1, 2, 3, 4, 0};
     for (size_t i = 0; i < map_hp_order.size(); ++i) {
         const size_t hp_idx = map_hp_order[i]; // hero, engineer, infantry3, infantry4, sentry.
-        fill_robot(i, opponent_hp, hp_idx);
-        fill_robot(i + 5, ally_hp, hp_idx);
+        fill_robot(i, observation_order[i], opponent_hp, hp_idx);
+        fill_robot(i + SENTRY_PACKET_ALLY_OFFSET,
+            observation_order[i] + SENTRY_OBSERVATION_ALLY_OFFSET, ally_hp, hp_idx);
     }
 
     interaction_data.enemy_outpost_alive = enemy_outpost_alive.load();
@@ -665,9 +699,10 @@ void JudgeBridgeNode::write_sentry_map_robot_data(const map_robot_data_t& map_ro
  * 功能: 周期性向哨兵发送观察空间数据
  * 参数: topic_message - MatchResult消息(包含红蓝两队目标信息)
  * 通信:
- *   - 数据包结构为10台地面机器人[id,hp,x,y]，不包含无人机槽位
+ *   - 数据包结构为10台地面机器人[id,hp,x,y]，不包含无人机坐标
  *   - 顺序为敌方英雄/工程/3/4/哨兵，再己方英雄/工程/3/4/哨兵
  *   - 末尾附加 enemy_outpost_alive，true表示敌方前哨站存活，false表示已摧毁
+ *   - 末尾附加 enemy_uav_detected，true表示近期识别到无人机，false表示未识别到
  *   - 位置按厘米定点数发送，未识别目标使用-1
  *   - 通过CMD_ID::INTERACTION_DATA命令发送给哨兵
  */
@@ -1057,6 +1092,8 @@ JudgeBridgeNode::JudgeBridgeNode()
     declare_parameter("sentry_target_max_count", 6);
     declare_parameter("sentry_target_max_abs_xy", 100.0);
     declare_parameter("sentry_detected_targets_topic", "/radar/rm_radar_pipeline/detected_targets");
+    declare_parameter("sentry_uav_target_topic", "/radar/uav_target");
+    declare_parameter("sentry_uav_target_timeout_ms", 500);
     
     // ============ 初始化串口 ============
     init_serial();
@@ -1091,6 +1128,10 @@ JudgeBridgeNode::JudgeBridgeNode()
         get_parameter("enemy_outpost_alive_topic").as_string(),
         rclcpp::SystemDefaultsQoS(),
         std::bind(&JudgeBridgeNode::enemy_outpost_alive_callback, this, std::placeholders::_1));
+    sub_uav_target = create_subscription<geometry_msgs::msg::PointStamped>(
+        get_parameter("sentry_uav_target_topic").as_string(),
+        rclcpp::SystemDefaultsQoS(),
+        std::bind(&JudgeBridgeNode::uav_target_callback, this, std::placeholders::_1));
     sub_custom_info = create_subscription<std_msgs::msg::String>("judge/custom_info", rclcpp::SystemDefaultsQoS(),
         [this](const std_msgs::msg::String& msg) {
             RCLCPP_INFO(get_logger(), "Custom Info: %s", msg.data.c_str());

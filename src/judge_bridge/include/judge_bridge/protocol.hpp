@@ -212,6 +212,7 @@ struct robot_interaction_sentry_map_robot_data_t {
         int16_t pos_y;              // cm, -1: unknown
     } robots[10];                   // opponent/ally: hero, engineer, infantry3, infantry4, sentry
     bool enemy_outpost_alive;        // true: alive, false: destroyed
+    bool enemy_uav_detected;         // true: UAV target observed recently
 };
 
 struct robot_interaction_uwb_t {
@@ -246,7 +247,7 @@ static_assert(sizeof(radar_link_coin_and_occupy_t) == 8);
 static_assert(sizeof(radar_link_buff_t) == 36);
 static_assert(sizeof(radar_link_password_t) == 6);
 static_assert(sizeof(robot_interaction_map_robot_data_t) == 54);
-static_assert(sizeof(robot_interaction_sentry_map_robot_data_t) == 87);
+static_assert(sizeof(robot_interaction_sentry_map_robot_data_t) == 88);
 static_assert(sizeof(robot_interaction_sentry_targets_t) == 6);
 static_assert(sizeof(robot_interaction_sentry_target_t) == 8);
 

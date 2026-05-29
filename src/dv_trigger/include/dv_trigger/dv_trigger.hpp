@@ -10,7 +10,6 @@
 #include <radar_interface/msg/radar_info.hpp>
 #include <radar_interface/msg/match_result.hpp>
 #include <radar_interface/msg/game_robot_hp.hpp>
-#include <radar_interface/msg/map_command.hpp>
 #include <radar_interface/msg/radar_mark_data.hpp>
 
 
@@ -30,18 +29,16 @@ private:
 
     radar_interface::team_color::ENUM color;
     bool dv_available();
-    void trigger_dv(const std::string_view& reason = "");
+    bool trigger_dv(const std::string_view& reason = "");
     void radar_info_callback(const radar_interface::msg::RadarInfo& info);
     void color_callback(const radar_interface::team_color::msg& color);
     void time_callback(const std_msgs::msg::UInt16& time);
-    void map_keyboard_callback(const radar_interface::msg::MapCommand& key);
 
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_custom_info;
     rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr pub_radar_cmd;
     rclcpp::Subscription<radar_interface::msg::RadarInfo>::SharedPtr sub_radar_info;
     rclcpp::Subscription<radar_interface::team_color::msg>::SharedPtr sub_team_color;
     rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr sub_time;
-    rclcpp::Subscription<radar_interface::msg::MapCommand>::SharedPtr sub_key;
 
 public:
     DvTriggerNode();

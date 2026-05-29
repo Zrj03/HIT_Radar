@@ -12,6 +12,7 @@
 #include <std_msgs/msg/u_int8.hpp>
 #include <std_msgs/msg/u_int16.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <stdexcept>
 
 #include "judge_bridge/protocol.hpp"
@@ -67,6 +68,7 @@ private:
     rclcpp::Subscription<radar_interface::msg::MatchResult>::SharedPtr sub_match_result_for_map;
     rclcpp::Subscription<radar_interface::msg::DetectedTargetArray>::SharedPtr sub_detected_targets;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_enemy_outpost_alive;
+    rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr sub_uav_target;
     std::atomic<team_color::ENUM> color { team_color::UNKNOWN };
     std::atomic_bool has_enemy_outpost_visual_state { false };
     std::atomic_bool enemy_outpost_alive { false };
@@ -97,10 +99,17 @@ private:
         double pos_x { 0.0 };
         double pos_y { 0.0 };
     };
-    std::array<SentryObservationSlot, 10> sentry_observation_slots {};
+    static constexpr size_t SENTRY_OBSERVATION_SLOT_COUNT = 12;
+    static constexpr size_t SENTRY_OBSERVATION_ALLY_OFFSET = 6;
+    static constexpr size_t SENTRY_PACKET_ROBOT_COUNT = 10;
+    static constexpr size_t SENTRY_PACKET_ALLY_OFFSET = 5;
+    std::array<SentryObservationSlot, SENTRY_OBSERVATION_SLOT_COUNT> sentry_observation_slots {};
     bool has_sentry_targets_packet { false };
     uint16_t latest_sentry_target_count { 0 };
     mutable std::mutex sentry_observation_mutex;
+    mutable std::mutex uav_target_mutex;
+    bool has_uav_target { false };
+    geometry_msgs::msg::PointStamped latest_uav_target;
     bool has_last_sentry_send_time { false };
     rclcpp::Time last_sentry_send_time {};
 
@@ -125,6 +134,7 @@ private:
         const std::vector<robot_interaction_sentry_target_t>& targets);
     void detected_targets_callback(const radar_interface::msg::DetectedTargetArray& detected_targets);
     void enemy_outpost_alive_callback(const std_msgs::msg::Bool& msg);
+    void uav_target_callback(const geometry_msgs::msg::PointStamped& msg);
 
 #if 0
     void check_enemy_invasion(const radar_interface::msg::MatchResult& msg);

@@ -13,6 +13,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <execution>
 #include <iostream>
@@ -115,7 +116,12 @@ Locator::Locator(int image_width, int image_height,
                  const cv::Matx44f& world_to_camera, float zoom_factor,
                  size_t queue_size, float min_depth_diff, float max_depth_diff,
                  float cluster_tolerance, int min_cluster_size,
-                 int max_cluster_size, float max_distance)
+                 int max_cluster_size, float max_distance,
+                 bool adaptive_cluster, float near_distance,
+                 float mid_distance, float near_cluster_tolerance,
+                 float mid_cluster_tolerance, float far_cluster_tolerance,
+                 int near_min_cluster_size, int mid_min_cluster_size,
+                 int far_min_cluster_size)
     : image_width_{image_width},
       image_height_{image_height},
       zoom_factor_{zoom_factor},
@@ -127,6 +133,15 @@ Locator::Locator(int image_width, int image_height,
       min_depth_diff_{min_depth_diff},
       max_depth_diff_{max_depth_diff},
       max_distance_{max_distance},
+      adaptive_cluster_{adaptive_cluster},
+      near_distance_{near_distance},
+      mid_distance_{mid_distance},
+      near_cluster_tolerance_{near_cluster_tolerance},
+      mid_cluster_tolerance_{mid_cluster_tolerance},
+      far_cluster_tolerance_{far_cluster_tolerance},
+      near_min_cluster_size_{near_min_cluster_size},
+      mid_min_cluster_size_{mid_min_cluster_size},
+      far_min_cluster_size_{far_min_cluster_size},
       kdtree_{new pcl::search::KdTree<pcl::PointXYZ>()},
       cloud_foreground_{new pcl::PointCloud<pcl::PointXYZ>()} {
     intrinsic_inv_ = intrinsic.inv();
@@ -253,9 +268,68 @@ void Locator::cluster() noexcept {
     if (cloud_foreground_->empty()) {
         return;
     }
-    kdtree_->setInputCloud(cloud_foreground_);
-    cluster_extractor_.setInputCloud(cloud_foreground_);
-    cluster_extractor_.extract(clusters_);
+
+    if (!adaptive_cluster_) {
+        kdtree_->setInputCloud(cloud_foreground_);
+        cluster_extractor_.setInputCloud(cloud_foreground_);
+        cluster_extractor_.extract(clusters_);
+    } else {
+        std::array<std::vector<int>, 3> bins;
+        const float near_distance = std::max(0.0f, near_distance_);
+        const float mid_distance = std::max(near_distance, mid_distance_);
+        for (size_t i = 0; i < cloud_foreground_->size(); ++i) {
+            const auto& point = cloud_foreground_->points[i];
+            const float range = std::hypot(point.x, point.y);
+            if (range < near_distance) {
+                bins[0].push_back(static_cast<int>(i));
+            } else if (range < mid_distance) {
+                bins[1].push_back(static_cast<int>(i));
+            } else {
+                bins[2].push_back(static_cast<int>(i));
+            }
+        }
+
+        const std::array<float, 3> tolerances {
+            near_cluster_tolerance_,
+            mid_cluster_tolerance_,
+            far_cluster_tolerance_,
+        };
+        const std::array<int, 3> min_sizes {
+            near_min_cluster_size_,
+            mid_min_cluster_size_,
+            far_min_cluster_size_,
+        };
+
+        for (size_t bin_idx = 0; bin_idx < bins.size(); ++bin_idx) {
+            const auto& source_indices = bins[bin_idx];
+            if (source_indices.empty())
+                continue;
+
+            auto subcloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+            subcloud->reserve(source_indices.size());
+            for (const int index : source_indices)
+                subcloud->push_back(cloud_foreground_->points[index]);
+
+            std::vector<pcl::PointIndices> local_clusters;
+            kdtree_->setInputCloud(subcloud);
+            cluster_extractor_.setClusterTolerance(std::max(1.0f, tolerances[bin_idx]));
+            cluster_extractor_.setMinClusterSize(std::max(1, min_sizes[bin_idx]));
+            cluster_extractor_.setInputCloud(subcloud);
+            cluster_extractor_.extract(local_clusters);
+
+            for (const auto& local_cluster : local_clusters) {
+                pcl::PointIndices global_cluster;
+                global_cluster.indices.reserve(local_cluster.indices.size());
+                for (const int local_index : local_cluster.indices) {
+                    if (local_index < 0 || static_cast<size_t>(local_index) >= source_indices.size())
+                        continue;
+                    global_cluster.indices.push_back(source_indices[local_index]);
+                }
+                if (!global_cluster.indices.empty())
+                    clusters_.push_back(std::move(global_cluster));
+            }
+        }
+    }
 
     for (size_t i = 0; i < clusters_.size(); ++i) {
         for (int index : clusters_[i].indices) {

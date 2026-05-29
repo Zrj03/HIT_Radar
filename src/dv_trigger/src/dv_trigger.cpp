@@ -11,7 +11,6 @@ DvTriggerNode::DvTriggerNode()
     dv_context.is_dv_trigered = false;
     dv_context.waiting_for_check = false;
 
-    declare_parameter("keyboard_trigger", 'L');
     declare_parameter("dv_check_time", 5);
     declare_parameter("dv_max", 2);
 
@@ -21,7 +20,6 @@ DvTriggerNode::DvTriggerNode()
     sub_radar_info = create_subscription<radar_interface::msg::RadarInfo>("judge/radar_info", rclcpp::SystemDefaultsQoS(), std::bind(&DvTriggerNode::radar_info_callback, this, std::placeholders::_1));
     sub_team_color = create_subscription<radar_interface::team_color::msg>("judge/color", rclcpp::SystemDefaultsQoS(), std::bind(&DvTriggerNode::color_callback, this, std::placeholders::_1));
     sub_time = create_subscription<std_msgs::msg::UInt16>("judge/remain_time", rclcpp::SystemDefaultsQoS(), std::bind(&DvTriggerNode::time_callback, this, std::placeholders::_1));
-    sub_key = create_subscription<radar_interface::msg::MapCommand>("judge/map_keyboard", rclcpp::SystemDefaultsQoS(), std::bind(&DvTriggerNode::map_keyboard_callback, this, std::placeholders::_1));
 }
 
 bool DvTriggerNode::dv_available()
@@ -31,11 +29,18 @@ bool DvTriggerNode::dv_available()
            dv_context.used_chances < get_parameter("dv_max").as_int();
 }
 
-void DvTriggerNode::trigger_dv(const std::string_view& reason)
+bool DvTriggerNode::trigger_dv(const std::string_view& reason)
 {
     if (!dv_available()) {
-        RCLCPP_WARN(get_logger(), "Trigger Failed. Trigger reason: %s", reason.data());
-        return;
+        RCLCPP_WARN(
+            get_logger(),
+            "Trigger Failed. reason=%s, chances=%u, used=%u, triggered=%s, waiting=%u",
+            reason.data(),
+            dv_context.now_chances,
+            dv_context.used_chances,
+            dv_context.is_dv_trigered ? "true" : "false",
+            dv_context.waiting_for_check);
+        return false;
     }
     auto radar_cmd = std_msgs::msg::UInt8();
     radar_cmd.data = std::min(long(dv_context.used_chances + 1), get_parameter("dv_max").as_int());
@@ -47,6 +52,7 @@ void DvTriggerNode::trigger_dv(const std::string_view& reason)
     message.data += reason;
     pub_custom_info->publish(message);
     RCLCPP_INFO(get_logger(), "Trigger double vulnerability: %d / %d, reason: %s", dv_context.used_chances, dv_context.now_chances, reason.data());
+    return true;
 }
 
 void DvTriggerNode::radar_info_callback(const radar_interface::msg::RadarInfo& info){
@@ -102,11 +108,7 @@ void DvTriggerNode::time_callback(const std_msgs::msg::UInt16& time)
     static uint16_t last_time = 0;
     if (time.data > last_time || time.data > 400)
         dv_context.used_chances = 0;    // 重置 trick
+    if (time.data > 0 && time.data <= 120)
+        trigger_dv("比赛剩余2分钟仍有双倍易伤机会");
     last_time = time.data;
-}
-
-void DvTriggerNode::map_keyboard_callback(const radar_interface::msg::MapCommand& key)
-{
-    if (key.cmd_keyboard == get_parameter("keyboard_trigger").as_int())
-        trigger_dv("手动触发");
 }

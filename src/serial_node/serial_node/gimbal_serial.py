@@ -18,15 +18,18 @@ class GimbalSerial(Node):
         # 声明串口参数
         self.declare_parameter('port', '/dev/radar')
         self.declare_parameter('baud', 115200)
+        self.declare_parameter('target_y_offset', -0.5)
 
         self.port_name = self.get_parameter('port').value
         self.baud_rate = self.get_parameter('baud').value
+        self.target_y_offset = float(self.get_parameter('target_y_offset').value)
 
         # 尝试打开串口
         try:
             self.ser = serial.Serial(self.port_name, self.baud_rate, timeout=0.01)
             self.get_logger().info(
-                f'已打开云台串口: {self.port_name} 波特率: {self.baud_rate}')
+                f'已打开云台串口: {self.port_name} 波特率: {self.baud_rate} '
+                f'目标Y偏移: {self.target_y_offset:.2f}m')
         except Exception as e:
             self.get_logger().error(f'串口打开失败 {self.port_name}: {e}')
             self.ser = None
@@ -36,7 +39,7 @@ class GimbalSerial(Node):
             return
 
         x = float(msg.point.x)
-        y = float(msg.point.y)
+        y = float(msg.point.y) + self.target_y_offset
         z = float(msg.point.z)
 
         # 计算 yaw / pitch

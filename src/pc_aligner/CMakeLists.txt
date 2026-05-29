@@ -9,12 +9,14 @@ add_compile_options(-O3)
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies(REQUIRED)
 find_package(OpenCV 4 REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common registration filters)
 
 
 file(GLOB_RECURSE SRC_FILES src/*.cpp)
 ament_auto_add_executable(${PROJECT_NAME} ${SRC_FILES})
 
-target_link_libraries(pc_aligner ${OpenCV_LIBS})
+target_include_directories(pc_aligner PUBLIC ${PCL_INCLUDE_DIRS})
+target_link_libraries(pc_aligner ${OpenCV_LIBS} ${PCL_LIBRARIES})
 target_compile_features(pc_aligner PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 
 if(BUILD_TESTING)

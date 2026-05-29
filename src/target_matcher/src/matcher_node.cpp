@@ -583,6 +583,11 @@ void MatcherNode::match_and_pub(const radar_interface::msg::TargetArray::SharedP
                 return false;
             if (!is_enemy_slot(slot_is_blue) || !is_in_enemy_lost_mark_rect(held_target.target))
                 return false;
+            if (std::any_of(msg->targets.begin(), msg->targets.end(), [&](const auto& track) {
+                    return static_cast<long>(track.id) == held_target.target.id
+                        && static_cast<int>(track.uncertainty) < uncertainty_limit;
+                }))
+                return false;
 
             const auto lost_mark_ns = static_cast<int64_t>(
                 std::max<int64_t>(0, get_parameter("enemy_lost_mark_hold_ms").as_int())) * 1000000ll;
