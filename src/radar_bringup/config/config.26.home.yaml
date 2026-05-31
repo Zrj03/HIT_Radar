@@ -50,7 +50,7 @@
   ros__parameters:
     sn: "DB0108949"
     camera_info_url: "package://hik_camera/config/6mm.yaml"
-    exposure_time: 8000.0
+    exposure_time: 6000.0
     gain: 23.0
     digital_shift: 1.0
     frame_rate: 40.0
@@ -83,7 +83,13 @@
     image_topic: "hik_6mm/image"
     camera_info_topic: "hik_6mm/camera_info"
     pointcloud_topic: "lidar_mid70/pc_raw"
+    # car_25.onnx output: [x, y, w, h, conf] x 34000
+    car_model_path: "/home/ajian/clear_radar-main/src/rm_radar_pipeline/models/car_25.onnx"
+    # armor_v8.onnx output: [x, y, w, h, 12 classes] x 8400
+    # class order: B1 B2 B3 B4 B5 Bsentry R1 R2 R3 R4 R5 Rsentry
     armor_model_path: "/home/ajian/clear_radar-main/src/nn_detector/models/armor_v8.onnx"
+    armor_class_color_map: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+    armor_class_type_map: [1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0]
     camera_frame: "hik_6mm_frame"
     lidar_frame: "lidar_mid70_frame"
     world_frame: "world"
@@ -135,48 +141,49 @@
     enemy_outpost_min_value: 160
     
     # Locator点云定位参数：距离单位为mm，queue_size为积分帧数
-    locator_queue_size: 3
-    locator_min_depth_diff: 500.0
-    locator_max_depth_diff: 4000.0
-    locator_cluster_tolerance: 400.0
-    locator_min_cluster_size: 8
-    locator_max_cluster_size: 1000
+    locator_queue_size: 5
+    locator_min_depth_diff: 300.0
+    locator_max_depth_diff: 5000.0
+    locator_cluster_tolerance: 600.0
+    locator_min_cluster_size: 3
+    locator_max_cluster_size: 600
     locator_max_distance: 29300.0
+    locator_debug_enabled: true
 
     sentry_targets_enabled: true
     sentry_targets_topic: "judge/sentry_targets"
     sentry_targets_timeout_ms: 500
     sentry_targets_max_count: 6
     sentry_targets_match_dist: 0.5
-    sentry_blind_guess_enabled: true
-    sentry_blind_guess_mark_topic: "judge/radar_mark_data"
-    sentry_blind_guess_switch_interval_ms: 500
-    sentry_blind_guess_blue_base_min_x: 24.0
-    sentry_blind_guess_blue_base_max_x: 28.5
-    sentry_blind_guess_red_base_min_x: 0.0
-    sentry_blind_guess_red_base_max_x: 4.0
-    sentry_blind_guess_base_min_y: 4.0
-    sentry_blind_guess_base_max_y: 10.5
+    sentry_blind_guess_enabled: false
+    # sentry_blind_guess_mark_topic: "judge/radar_mark_data"
+    # sentry_blind_guess_switch_interval_ms: 500
+    # sentry_blind_guess_blue_base_min_x: 24.0
+    # sentry_blind_guess_blue_base_max_x: 28.5
+    # sentry_blind_guess_red_base_min_x: 0.0
+    # sentry_blind_guess_red_base_max_x: 4.0
+    # sentry_blind_guess_base_min_y: 4.0
+    # sentry_blind_guess_base_max_y: 10.5
     
-    hero_lob_guess_enabled: true
-    hero_lob_guess_switch_interval_ms: 500
-    hero_lob_guess_radius_m: 0.3
+    hero_lob_guess_enabled: false
+    # hero_lob_guess_switch_interval_ms: 500
+    # hero_lob_guess_radius_m: 0.3
     default_team_color: blue
     
-    enemy_lost_mark_enabled: true
-    enemy_lost_mark_rect_min_x: 6.0
-    enemy_lost_mark_rect_min_y: 10.0
-    enemy_lost_mark_rect_max_x: 11.5
-    enemy_lost_mark_rect_max_y: 14.0
-    enemy_lost_mark_x: 4.0
-    enemy_lost_mark_y: 14.0
-    enemy_lost_mark_radius: 1.5
-    enemy_lost_mark_hold_ms: 1500
+    enemy_lost_mark_enabled: false
+    # enemy_lost_mark_rect_min_x: 6.0
+    # enemy_lost_mark_rect_min_y: 10.0
+    # enemy_lost_mark_rect_max_x: 11.5
+    # enemy_lost_mark_rect_max_y: 14.0
+    # enemy_lost_mark_x: 4.0
+    # enemy_lost_mark_y: 14.0
+    # enemy_lost_mark_radius: 1.5
+    # enemy_lost_mark_hold_ms: 1500
     
     min_publish_confidence: 0.0
-    car_confidence_threshold: 0.25
+    car_confidence_threshold: 0.15
     armor_confidence_threshold: 0.25
-    nms_threshold: 0.65
+    nms_threshold: 0.70
 
 /radar/multiplexer:
   ros__parameters:

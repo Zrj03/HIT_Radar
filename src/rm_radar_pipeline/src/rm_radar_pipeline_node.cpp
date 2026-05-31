@@ -118,7 +118,8 @@ std::vector<DnnDetection> parse_yolo_output(const cv::Mat& output, const cv::Siz
     return detections;
 }
 
-std::vector<DnnDetection> parse_armor_v8_output(const cv::Mat& output, const cv::Size& model_size, const cv::Size& image_size,
+std::vector<DnnDetection> parse_armor_output(const cv::Mat& output, const cv::Size& model_size, const cv::Size& image_size,
+    const std::vector<int>& class_color_map, const std::vector<int>& class_type_map,
     float conf_threshold, float nms_threshold)
 {
     cv::Mat out = output;
@@ -127,14 +128,19 @@ std::vector<DnnDetection> parse_armor_v8_output(const cv::Mat& output, const cv:
 
     const int dim1 = out.size[1];
     const int dim2 = out.size[2];
-    const bool channels_first = dim1 == 16;
-    const int channels = channels_first ? dim1 : dim2;
-    const int preds = channels_first ? dim2 : dim1;
-    if (channels != 16)
+    const int class_num = static_cast<int>(std::min(class_color_map.size(), class_type_map.size()));
+    if (class_num <= 0)
         return {};
 
-    constexpr std::array<int, 12> kColorMap = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1};
-    constexpr std::array<int, 12> kTypeMap = {1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0};
+    const int channels_without_obj = 4 + class_num;
+    const int channels_with_obj = 5 + class_num;
+    const bool channels_first = dim1 == channels_without_obj || dim1 == channels_with_obj;
+    const int channels = channels_first ? dim1 : dim2;
+    const int preds = channels_first ? dim2 : dim1;
+    if (channels != channels_without_obj && channels != channels_with_obj)
+        return {};
+    const bool has_objectness = channels == channels_with_obj;
+    const int class_offset = has_objectness ? 5 : 4;
 
     auto at = [&](int idx, int channel) -> float {
         const float* ptr = out.ptr<float>();
@@ -148,14 +154,16 @@ std::vector<DnnDetection> parse_armor_v8_output(const cv::Mat& output, const cv:
     std::vector<int> labels;
     for (int i = 0; i < preds; ++i) {
         int best_label = 0;
-        float best_score = at(i, 4);
-        for (int c = 1; c < 12; ++c) {
-            const float score = at(i, 4 + c);
-            if (score > best_score) {
-                best_score = score;
+        float best_class_score = at(i, class_offset);
+        for (int c = 1; c < class_num; ++c) {
+            const float class_score = at(i, class_offset + c);
+            if (class_score > best_class_score) {
+                best_class_score = class_score;
                 best_label = c;
             }
         }
+        const float objectness = has_objectness ? at(i, 4) : 1.0f;
+        const float best_score = objectness * best_class_score;
         if (best_score < conf_threshold)
             continue;
 
@@ -180,7 +188,7 @@ std::vector<DnnDetection> parse_armor_v8_output(const cv::Mat& output, const cv:
     detections.reserve(keep.size());
     for (int idx : keep) {
         const int label = labels[idx];
-        detections.push_back({ boxes[idx], label, kColorMap[label], kTypeMap[label], scores[idx] });
+        detections.push_back({ boxes[idx], label, class_color_map[label], class_type_map[label], scores[idx] });
     }
     return detections;
 }
@@ -188,9 +196,12 @@ std::vector<DnnDetection> parse_armor_v8_output(const cv::Mat& output, const cv:
 class CvDnnRobotDetector {
 public:
     CvDnnRobotDetector(const std::string& car_model, const std::string& armor_model, cv::Size input_size,
-        int class_num, float car_conf, float armor_conf, float nms)
+        int class_num, const std::vector<int>& armor_class_color_map, const std::vector<int>& armor_class_type_map,
+        float car_conf, float armor_conf, float nms)
         : input_size_(input_size)
         , class_num_(class_num)
+        , armor_class_color_map_(armor_class_color_map)
+        , armor_class_type_map_(armor_class_type_map)
         , car_conf_(car_conf)
         , armor_conf_(armor_conf)
         , nms_(nms)
@@ -245,7 +256,8 @@ private:
         cv::Mat blob = cv::dnn::blobFromImage(image, 1.0 / 255.0, input_size_, cv::Scalar(), true, false);
         net.setInput(blob);
         cv::Mat output = net.forward();
-        return parse_armor_v8_output(output, input_size_, image.size(), armor_conf_, nms_);
+        return parse_armor_output(output, input_size_, image.size(), armor_class_color_map_, armor_class_type_map_,
+            armor_conf_, nms_);
     }
 
     int color_type_to_label(int color, int type) const
@@ -279,6 +291,8 @@ private:
     cv::dnn::Net armor_net_;
     cv::Size input_size_;
     int class_num_;
+    std::vector<int> armor_class_color_map_;
+    std::vector<int> armor_class_type_map_;
     float car_conf_;
     float armor_conf_;
     float nms_;
@@ -535,6 +549,12 @@ public:
         world_frame_ = declare_parameter("world_frame", std::string("world"));
         car_model_path_ = declare_parameter("car_model_path", default_model_path("car.onnx"));
         armor_model_path_ = declare_parameter("armor_model_path", default_nn_detector_model_path("armor_v8.onnx"));
+        const auto armor_class_color_map_param = declare_parameter<std::vector<int64_t>>(
+            "armor_class_color_map", {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1});
+        const auto armor_class_type_map_param = declare_parameter<std::vector<int64_t>>(
+            "armor_class_type_map", {1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0});
+        armor_class_color_map_.assign(armor_class_color_map_param.begin(), armor_class_color_map_param.end());
+        armor_class_type_map_.assign(armor_class_type_map_param.begin(), armor_class_type_map_param.end());
         min_publish_confidence_ = declare_parameter("min_publish_confidence", 0.0);
         car_confidence_threshold_ = declare_parameter("car_confidence_threshold", 0.25);
         armor_confidence_threshold_ = declare_parameter("armor_confidence_threshold", 0.50);
@@ -596,12 +616,13 @@ public:
         locator_near_min_cluster_size_ = declare_parameter("locator_near_min_cluster_size", 8);
         locator_mid_min_cluster_size_ = declare_parameter("locator_mid_min_cluster_size", 6);
         locator_far_min_cluster_size_ = declare_parameter("locator_far_min_cluster_size", 4);
+        locator_debug_enabled_ = declare_parameter("locator_debug_enabled", false);
         sentry_targets_enabled_ = declare_parameter("sentry_targets_enabled", true);
         sentry_targets_topic_ = declare_parameter("sentry_targets_topic", std::string("judge/sentry_targets"));
         sentry_targets_timeout_ms_ = declare_parameter("sentry_targets_timeout_ms", 500);
         sentry_targets_max_count_ = declare_parameter("sentry_targets_max_count", 6);
         sentry_targets_match_dist_ = declare_parameter("sentry_targets_match_dist", 0.5);
-        sentry_blind_guess_enabled_ = declare_parameter("sentry_blind_guess_enabled", true);
+        sentry_blind_guess_enabled_ = declare_parameter("sentry_blind_guess_enabled", false);
         sentry_blind_guess_mark_topic_ = declare_parameter("sentry_blind_guess_mark_topic", std::string("judge/radar_mark_data"));
         sentry_blind_guess_switch_interval_ms_ = declare_parameter("sentry_blind_guess_switch_interval_ms", 500);
         sentry_blind_guess_blue_base_min_x_ = declare_parameter("sentry_blind_guess_blue_base_min_x", 24.0);
@@ -610,16 +631,34 @@ public:
         sentry_blind_guess_red_base_max_x_ = declare_parameter("sentry_blind_guess_red_base_max_x", 4.0);
         sentry_blind_guess_base_min_y_ = declare_parameter("sentry_blind_guess_base_min_y", 4.0);
         sentry_blind_guess_base_max_y_ = declare_parameter("sentry_blind_guess_base_max_y", 10.5);
-        hero_lob_guess_enabled_ = declare_parameter("hero_lob_guess_enabled", true);
+        hero_lob_guess_enabled_ = declare_parameter("hero_lob_guess_enabled", false);
         hero_lob_guess_switch_interval_ms_ = declare_parameter("hero_lob_guess_switch_interval_ms", 500);
         hero_lob_guess_radius_m_ = declare_parameter("hero_lob_guess_radius_m", 0.6);
+        hero_lob_guess_infantry4_enabled_ = declare_parameter("hero_lob_guess_infantry4_enabled", false);
+        hero_lob_guess_infantry3_fixed_enabled_ = declare_parameter("hero_lob_guess_infantry3_fixed_enabled", false);
+        hero_lob_guess_infantry3_x_ = declare_parameter("hero_lob_guess_infantry3_x", 12.66);
+        hero_lob_guess_infantry3_y_ = declare_parameter("hero_lob_guess_infantry3_y", 15.0);
         fixed_enemy_guess_enabled_ = declare_parameter("fixed_enemy_guess_enabled", false);
         fixed_enemy_guess_engineer_x_ = declare_parameter("fixed_enemy_guess_engineer_x", 18.19);
         fixed_enemy_guess_engineer_y_ = declare_parameter("fixed_enemy_guess_engineer_y", 13.33);
         fixed_enemy_guess_hero_x_ = declare_parameter("fixed_enemy_guess_hero_x", 23.87);
         fixed_enemy_guess_hero_y_ = declare_parameter("fixed_enemy_guess_hero_y", 3.10);
-        enemy_region_guess_enabled_ = declare_parameter("enemy_region_guess_enabled", true);
+        enemy_region_guess_enabled_ = declare_parameter("enemy_region_guess_enabled", false);
         enemy_region_guess_switch_interval_ms_ = declare_parameter("enemy_region_guess_switch_interval_ms", 500);
+        mining_guess_enabled_ = declare_parameter("mining_guess_enabled", false);
+        mining_guess_switch_interval_ms_ = declare_parameter("mining_guess_switch_interval_ms", 500);
+        early_engineer_guess_enabled_ = declare_parameter("early_engineer_guess_enabled", false);
+        early_engineer_guess_switch_interval_ms_ =
+            declare_parameter("early_engineer_guess_switch_interval_ms", 500);
+        early_engineer_guess_early_duration_ms_ =
+            declare_parameter("early_engineer_guess_early_duration_ms", 60000);
+        early_engineer_guess_radius_m_ = declare_parameter("early_engineer_guess_radius_m", 0.3);
+        early_engineer_guess_late_radius_m_ = declare_parameter("early_engineer_guess_late_radius_m", 0.6);
+        early_engineer_guess_late_shift_x_m_ =
+            declare_parameter("early_engineer_guess_late_shift_x_m", 1.0);
+        early_engineer_guess_points_ = points_from_flat_array(declare_parameter(
+            "early_engineer_guess_points",
+            std::vector<double> {9.91, 3.66, 10.02, 2.14}));
         enemy_region_guess_engineer_x_ = declare_parameter("enemy_region_guess_engineer_x", 15.36);
         enemy_region_guess_engineer_y_ = declare_parameter("enemy_region_guess_engineer_y", 7.27);
         enemy_region_guess_engineer_radius_m_ = declare_parameter("enemy_region_guess_engineer_radius_m", 0.5);
@@ -655,7 +694,49 @@ public:
         corridor_guess_early_slots_ = slots_from_param(declare_parameter(
             "corridor_guess_early_slots",
             std::vector<int64_t> {kSlotEngineer, kSlotInfantry3, kSlotInfantry4}));
-        enemy_lost_mark_enabled_ = declare_parameter("enemy_lost_mark_enabled", true);
+        configured_enemy_guess_enabled_ = declare_parameter("configured_enemy_guess_enabled", false);
+        configured_enemy_guess_reference_color_ =
+            declare_parameter("configured_enemy_guess_reference_color", std::string("red"));
+        std::transform(
+            configured_enemy_guess_reference_color_.begin(),
+            configured_enemy_guess_reference_color_.end(),
+            configured_enemy_guess_reference_color_.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        configured_enemy_guess_switch_interval_ms_ =
+            declare_parameter("configured_enemy_guess_switch_interval_ms", 500);
+        configured_enemy_guess_engineer_radius_m_ =
+            declare_parameter("configured_enemy_guess_engineer_radius_m", 0.4);
+        configured_enemy_guess_hero_radius_m_ =
+            declare_parameter("configured_enemy_guess_hero_radius_m", 0.5);
+        configured_enemy_guess_sentry_radius_m_ =
+            declare_parameter("configured_enemy_guess_sentry_radius_m", 0.4);
+        configured_enemy_guess_infantry4_radius_m_ =
+            declare_parameter("configured_enemy_guess_infantry4_radius_m", 0.4);
+        auto configured_engineer = declare_parameter(
+            "configured_enemy_guess_engineer_segment",
+            std::vector<double> {9.91, 3.66, 10.02, 2.14});
+        if (configured_engineer.size() >= 4) {
+            configured_enemy_guess_engineer_start_ = {configured_engineer[0], configured_engineer[1]};
+            configured_enemy_guess_engineer_end_ = {configured_engineer[2], configured_engineer[3]};
+        }
+        auto configured_hero = declare_parameter(
+            "configured_enemy_guess_hero_point",
+            std::vector<double> {15.5, 14.0});
+        if (configured_hero.size() >= 2)
+            configured_enemy_guess_hero_point_ = {configured_hero[0], configured_hero[1]};
+        auto configured_sentry = declare_parameter(
+            "configured_enemy_guess_sentry_point",
+            std::vector<double> {10.0, 12.0});
+        if (configured_sentry.size() >= 2)
+            configured_enemy_guess_sentry_point_ = {configured_sentry[0], configured_sentry[1]};
+        auto configured_infantry4 = declare_parameter(
+            "configured_enemy_guess_infantry4_segment",
+            std::vector<double> {9.35, 7.5, 11.0, 7.5});
+        if (configured_infantry4.size() >= 4) {
+            configured_enemy_guess_infantry4_start_ = {configured_infantry4[0], configured_infantry4[1]};
+            configured_enemy_guess_infantry4_end_ = {configured_infantry4[2], configured_infantry4[3]};
+        }
+        enemy_lost_mark_enabled_ = declare_parameter("enemy_lost_mark_enabled", false);
         enemy_lost_mark_rect_min_x_ = declare_parameter("enemy_lost_mark_rect_min_x", 6.0);
         enemy_lost_mark_rect_min_y_ = declare_parameter("enemy_lost_mark_rect_min_y", 10.0);
         enemy_lost_mark_rect_max_x_ = declare_parameter("enemy_lost_mark_rect_max_x", 11.5);
@@ -721,7 +802,9 @@ private:
         EnemyRegion,
         Corridor,
         Mining,
+        EarlyEngineer,
         Fixed,
+        Configured,
     };
 
     struct CameraFallbackSlot {
@@ -758,15 +841,16 @@ private:
         has_sentry_targets_ = true;
     }
 
-    void radar_mark_callback(const radar_interface::msg::RadarMarkData::SharedPtr msg)
-    {
-        if (!msg)
-            return;
+	    void radar_mark_callback(const radar_interface::msg::RadarMarkData::SharedPtr msg)
+	    {
+	        if (!msg)
+	            return;
 
-        const uint16_t current = msg->mark_progress;
-        if (sentry_blind_guess_state_.active && !sentry_blind_guess_state_.locked &&
-            sentry_blind_guess_state_.has_mark) {
-            for (const int slot : { kSlotInfantry3, kSlotInfantry4 }) {
+	        const uint16_t current = msg->mark_progress;
+	        bool configured_unmarked_feedback = false;
+	        if (sentry_blind_guess_state_.active && !sentry_blind_guess_state_.locked &&
+	            sentry_blind_guess_state_.has_mark) {
+	            for (const int slot : { kSlotInfantry3, kSlotInfantry4 }) {
                 const uint16_t mask = mark_mask_for_slot(slot);
                 if ((current & mask) != 0 && (sentry_blind_guess_state_.last_mark_progress & mask) == 0) {
                     sentry_blind_guess_state_.current_slot = slot;
@@ -801,18 +885,24 @@ private:
             const uint16_t mask = mark_mask_for_slot(slot);
             if (mask == 0)
                 continue;
-            if ((current & mask) != 0 &&
-                (last_mark_progress_for_source_lock_ & mask) == 0 &&
-                last_guess_sources_[slot] != GuessSource::None) {
-                locked_guess_sources_[slot] = last_guess_sources_[slot];
-                RCLCPP_INFO(
+	            if ((current & mask) != 0 &&
+	                (last_mark_progress_for_source_lock_ & mask) == 0 &&
+	                last_guess_sources_[slot] != GuessSource::None) {
+	                locked_guess_sources_[slot] = last_guess_sources_[slot];
+	                RCLCPP_INFO(
                     get_logger(),
-                    "Guess source locked for slot %d from radar mark feedback: mark_progress=0x%04x",
-                    slot, current);
-            }
-        }
-        last_mark_progress_for_source_lock_ = current;
-    }
+	                    "Guess source locked for slot %d from radar mark feedback: mark_progress=0x%04x",
+	                    slot, current);
+	            } else if (last_guess_sources_[slot] == GuessSource::Configured &&
+	                locked_guess_sources_[slot] != GuessSource::Configured &&
+	                (current & mask) == 0) {
+	                configured_unmarked_feedback = true;
+	            }
+	        }
+	        if (configured_unmarked_feedback)
+	            advance_configured_enemy_guess_from_feedback();
+	        last_mark_progress_for_source_lock_ = current;
+	    }
 
     void remain_time_callback(const std_msgs::msg::UInt16::SharedPtr msg)
     {
@@ -833,6 +923,7 @@ private:
             reset_sentry_blind_guess();
             reset_hero_lob_guess();
             corridor_guess_state_ = {};
+            configured_enemy_guess_state_ = {};
             last_guess_sources_.fill(GuessSource::None);
             locked_guess_sources_.fill(GuessSource::None);
             last_mark_progress_for_source_lock_ = 0;
@@ -903,6 +994,7 @@ private:
         if (!detector_) {
             detector_ = std::make_unique<CvDnnRobotDetector>(
                 car_model_path_, armor_model_path_, cv::Size(640, 640), kClassNum,
+                armor_class_color_map_, armor_class_type_map_,
                 static_cast<float>(car_confidence_threshold_), static_cast<float>(armor_confidence_threshold_),
                 static_cast<float>(nms_threshold_));
         }
@@ -1038,9 +1130,38 @@ private:
         locator_->cluster();
         auto robots = detector_->detect(image);
         locator_->search(robots);
+        log_locator_debug(robots);
         tracker_->update(robots, to_chrono_time(image_msg->header.stamp));
         publish_visualization_if_enabled(image_msg->header, image, robots);
         publish_outputs(image_msg->header, robots);
+    }
+
+    void log_locator_debug(const std::vector<radar::Robot>& robots)
+    {
+        if (!locator_debug_enabled_ || !locator_)
+            return;
+
+        size_t located_count = 0;
+        for (const auto& robot : robots) {
+            if (robot.location())
+                ++located_count;
+        }
+
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "locator debug: detections=%zu located=%zu input_points=%zu zero_points=%zu max_dist_rejects=%zu invalid_camera_rejects=%zu image_bounds_rejects=%zu projected_points=%zu depth_pixels=%zu foreground_points=%zu clusters=%zu roi_candidate_points=%zu",
+            robots.size(),
+            located_count,
+            locator_->lastInputPointCount(),
+            locator_->lastZeroPointCount(),
+            locator_->lastMaxDistanceRejectCount(),
+            locator_->lastInvalidCameraRejectCount(),
+            locator_->lastImageBoundsRejectCount(),
+            locator_->lastProjectedPointCount(),
+            locator_->lastDepthPixelCount(),
+            locator_->foregroundPointCount(),
+            locator_->clusterCount(),
+            locator_->lastSearchCandidatePointCount());
     }
 
     std::optional<cv::Point2d> project_world_to_image(double x, double y, double z) const
@@ -1449,11 +1570,35 @@ private:
         const std::array<double, 2>& point,
         GuessSource source)
     {
-        target.id = id;
+        const bool confirmed_by_mark = slot >= 0 && slot < kRobotsPerTeam &&
+            locked_guess_sources_[slot] == source;
+        target.id = confirmed_by_mark ? static_cast<int64_t>(slot) : id;
         target.position[0] = point[0];
         target.position[1] = point[1];
         if (slot >= 0 && slot < kRobotsPerTeam)
             last_guess_sources_[slot] = source;
+    }
+
+    void clear_guess_locks_for_observed_targets(const radar_interface::msg::MatchResult& match_msg)
+    {
+        const auto& enemy_slots = team_color_ == radar_interface::team_color::C_BLUE ? match_msg.red : match_msg.blue;
+        for (int slot = 0; slot < kRobotsPerTeam && slot < static_cast<int>(enemy_slots.size()); ++slot) {
+            const auto& target = enemy_slots[slot];
+            if (target.id < 0)
+                continue;
+            if (locked_guess_sources_[slot] != GuessSource::None) {
+                RCLCPP_INFO_THROTTLE(
+                    get_logger(), *get_clock(), 1000,
+                    "Observed %s target id=%ld, clear locked guess source for this slot.",
+                    slot_name(slot), target.id);
+            }
+            locked_guess_sources_[slot] = GuessSource::None;
+            last_guess_sources_[slot] = GuessSource::None;
+            if (slot == sentry_blind_guess_state_.current_slot && sentry_blind_guess_state_.locked)
+                reset_sentry_blind_guess();
+            if (slot == kSlotHero && hero_lob_guess_state_.locked)
+                reset_hero_lob_guess();
+        }
     }
 
     std::array<double, 2> mirror_own_to_enemy_point(const std::array<double, 2>& point) const
@@ -1461,17 +1606,38 @@ private:
         return {kFieldWidthM - point[0], kFieldHeightM - point[1]};
     }
 
+    std::array<double, 2> configured_reference_to_enemy_point(
+        const std::array<double, 2>& point) const
+    {
+        if (configured_enemy_guess_reference_color_ == "own")
+            return mirror_own_to_enemy_point(point);
+        if (configured_enemy_guess_reference_color_ == "enemy" ||
+            configured_enemy_guess_reference_color_ == "field" ||
+            configured_enemy_guess_reference_color_ == "absolute") {
+            return point;
+        }
+        if (configured_enemy_guess_reference_color_ == "blue")
+            return team_color_ == radar_interface::team_color::C_RED
+                ? point
+                : mirror_own_to_enemy_point(point);
+
+        return team_color_ == radar_interface::team_color::C_BLUE
+            ? point
+            : mirror_own_to_enemy_point(point);
+    }
+
     int64_t corridor_elapsed_ns(const rclcpp::Time& now_time) const
     {
-        int64_t elapsed_ns = (now_time - corridor_guess_state_.start_time).nanoseconds();
         if (has_remain_time_) {
             const int64_t total_ms =
                 static_cast<int64_t>(std::max(0, corridor_guess_early_duration_ms_)) +
                 static_cast<int64_t>(std::max(0, corridor_guess_late_duration_ms_));
             const int64_t elapsed_ms = total_ms - static_cast<int64_t>(latest_remain_time_sec_) * 1000LL;
-            elapsed_ns = std::clamp(elapsed_ms, int64_t {0}, total_ms) * 1000000LL;
+            return std::clamp(elapsed_ms, int64_t {0}, total_ms) * 1000000LL;
         }
-        return elapsed_ns;
+        if (corridor_guess_state_.start_time.nanoseconds() == 0)
+            return 0;
+        return (now_time - corridor_guess_state_.start_time).nanoseconds();
     }
 
     bool in_first_two_minutes(const rclcpp::Time& now_time) const
@@ -1579,13 +1745,18 @@ private:
 
         auto& enemy_slots = team_color_ == radar_interface::team_color::C_BLUE ? match_msg.red : match_msg.blue;
         auto& enemy_hero = enemy_slots[kSlotHero];
-        if (enemy_hero.id != -1 && enemy_hero.id >= 0) {
+        auto& enemy_infantry4 = enemy_slots[kSlotInfantry4];
+        auto& enemy_infantry3 = enemy_slots[kSlotInfantry3];
+        const bool can_guess_hero = can_apply_guess(enemy_hero, kSlotHero, GuessSource::HeroLob);
+        const bool can_guess_infantry4 = hero_lob_guess_infantry4_enabled_ &&
+            can_apply_guess(enemy_infantry4, kSlotInfantry4, GuessSource::HeroLob);
+        const bool can_guess_infantry3 = hero_lob_guess_infantry3_fixed_enabled_ &&
+            can_apply_guess(enemy_infantry3, kSlotInfantry3, GuessSource::HeroLob);
+        if (!can_guess_hero && !can_guess_infantry4 && !can_guess_infantry3) {
             if (hero_lob_guess_state_.active)
                 hero_lob_guess_state_.active = false;
             return;
         }
-        if (!can_apply_guess(enemy_hero, kSlotHero, GuessSource::HeroLob))
-            return;
 
         hero_lob_guess_state_.active = true;
         const auto now_time = now();
@@ -1614,15 +1785,27 @@ private:
         });
         double guess_x = mirrored[0];
         double guess_y = mirrored[1];
-        publish_guess(enemy_hero, kSlotHero, -20, {guess_x, guess_y}, GuessSource::HeroLob);
+        if (can_guess_hero)
+            publish_guess(enemy_hero, kSlotHero, -20, {guess_x, guess_y}, GuessSource::HeroLob);
+        if (can_guess_infantry4)
+            publish_guess(enemy_infantry4, kSlotInfantry4, -24, {guess_x, guess_y}, GuessSource::HeroLob);
+        if (can_guess_infantry3)
+            publish_guess(
+                enemy_infantry3,
+                kSlotInfantry3,
+                -23,
+                {hero_lob_guess_infantry3_x_, hero_lob_guess_infantry3_y_},
+                GuessSource::HeroLob);
 
         RCLCPP_INFO_THROTTLE(
             get_logger(), *get_clock(), 1000,
-            "Hero lob guess publishing candidate %zu near point %zu (%.3f, %.3f), locked=%s.",
+            "Hero lob guess publishing candidate %zu near point %zu at (%.3f, %.3f), infantry3=(%.2f, %.2f), locked=%s.",
             candidate_idx,
             candidate_idx / hero_lob_guess_offsets_.size(),
-            enemy_hero.position[0],
-            enemy_hero.position[1],
+            guess_x,
+            guess_y,
+            hero_lob_guess_infantry3_x_,
+            hero_lob_guess_infantry3_y_,
             hero_lob_guess_state_.locked ? "true" : "false");
     }
 
@@ -1742,7 +1925,7 @@ private:
 
     void apply_mining_guess(radar_interface::msg::MatchResult& match_msg)
     {
-        if (!enemy_region_guess_enabled_)
+        if (!mining_guess_enabled_)
             return;
 
         auto& enemy_slots = team_color_ == radar_interface::team_color::C_BLUE ? match_msg.red : match_msg.blue;
@@ -1753,6 +1936,12 @@ private:
         const auto now_time = now();
         if (enemy_region_guess_state_.last_switch_time.nanoseconds() == 0)
             enemy_region_guess_state_.last_switch_time = now_time;
+        const int64_t switch_ns =
+            static_cast<int64_t>(std::max(1, mining_guess_switch_interval_ms_)) * 1000000LL;
+        if ((now_time - enemy_region_guess_state_.last_switch_time).nanoseconds() >= switch_ns) {
+            ++enemy_region_guess_state_.current_point;
+            enemy_region_guess_state_.last_switch_time = now_time;
+        }
         const double radius = std::max(0.0, enemy_region_guess_engineer_radius_m_);
         const auto& offset = hero_lob_guess_offsets_[
             enemy_region_guess_state_.current_point % hero_lob_guess_offsets_.size()];
@@ -1765,6 +1954,52 @@ private:
             get_logger(), *get_clock(), 1000,
             "Mining guess publishing engineer at (%.2f, %.2f).",
             engineer.position[0], engineer.position[1]);
+    }
+
+    void apply_early_engineer_guess(radar_interface::msg::MatchResult& match_msg)
+    {
+        if (!early_engineer_guess_enabled_ || early_engineer_guess_points_.empty())
+            return;
+
+        const auto now_time = now();
+        const int64_t elapsed_ns = corridor_elapsed_ns(now_time);
+        const int64_t early_ns =
+            static_cast<int64_t>(std::max(0, early_engineer_guess_early_duration_ms_)) * 1000000LL;
+        const bool use_early_area = elapsed_ns < early_ns;
+
+        auto& enemy_slots = team_color_ == radar_interface::team_color::C_BLUE ? match_msg.red : match_msg.blue;
+        auto& engineer = enemy_slots[kSlotEngineer];
+        if (!can_apply_guess(engineer, kSlotEngineer, GuessSource::EarlyEngineer))
+            return;
+
+        if (early_engineer_guess_state_.last_switch_time.nanoseconds() == 0)
+            early_engineer_guess_state_.last_switch_time = now_time;
+        const int64_t switch_ns =
+            static_cast<int64_t>(std::max(1, early_engineer_guess_switch_interval_ms_)) * 1000000LL;
+        if ((now_time - early_engineer_guess_state_.last_switch_time).nanoseconds() >= switch_ns) {
+            ++early_engineer_guess_state_.current_point;
+            early_engineer_guess_state_.last_switch_time = now_time;
+        }
+
+        const double radius = std::max(
+            0.0,
+            use_early_area ? early_engineer_guess_radius_m_ : early_engineer_guess_late_radius_m_);
+        const size_t candidate_count = early_engineer_guess_points_.size() * hero_lob_guess_offsets_.size();
+        const size_t candidate_idx = early_engineer_guess_state_.current_point % candidate_count;
+        const auto& center = early_engineer_guess_points_[candidate_idx / hero_lob_guess_offsets_.size()];
+        const auto& offset = hero_lob_guess_offsets_[candidate_idx % hero_lob_guess_offsets_.size()];
+        auto point = mirror_own_to_enemy_point({
+            center[0] + offset[0] * radius,
+            center[1] + offset[1] * radius,
+        });
+        if (!use_early_area)
+            point[0] += early_engineer_guess_late_shift_x_m_;
+
+        publish_guess(engineer, kSlotEngineer, -43, point, GuessSource::EarlyEngineer);
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "Engineer time-window guess publishing engineer at (%.2f, %.2f), phase=%s.",
+            engineer.position[0], engineer.position[1], use_early_area ? "early" : "late");
     }
 
     const char* slot_name(int slot) const
@@ -1911,6 +2146,131 @@ private:
         }
     }
 
+    std::array<double, 2> configured_circle_candidate(
+        const std::array<double, 2>& center,
+        double radius,
+        size_t index) const
+    {
+        const auto& offset = hero_lob_guess_offsets_[index % hero_lob_guess_offsets_.size()];
+        const double r = std::max(0.0, radius);
+        return configured_reference_to_enemy_point({
+            center[0] + offset[0] * r,
+            center[1] + offset[1] * r,
+        });
+    }
+
+	    std::array<double, 2> configured_segment_candidate(
+	        const std::array<double, 2>& start,
+	        const std::array<double, 2>& end,
+        double radius,
+        size_t index) const
+    {
+        constexpr size_t kLongitudinalSamples = 9;
+        constexpr std::array<double, 5> kLateralSamples {{0.0, -0.5, 0.5, -1.0, 1.0}};
+        const size_t longitudinal_idx = index % kLongitudinalSamples;
+        const size_t lateral_idx = (index / kLongitudinalSamples) % kLateralSamples.size();
+        const double t = kLongitudinalSamples <= 1
+            ? 0.5
+            : static_cast<double>(longitudinal_idx) / static_cast<double>(kLongitudinalSamples - 1);
+
+        const double vx = end[0] - start[0];
+        const double vy = end[1] - start[1];
+        const double len = std::hypot(vx, vy);
+        double nx = 0.0;
+        double ny = 1.0;
+        if (len > 1e-9) {
+            nx = -vy / len;
+            ny = vx / len;
+        }
+
+        const double lateral = kLateralSamples[lateral_idx] * std::max(0.0, radius);
+        return configured_reference_to_enemy_point({
+            start[0] + vx * t + nx * lateral,
+            start[1] + vy * t + ny * lateral,
+	        });
+	    }
+
+	    void advance_configured_enemy_guess_from_feedback()
+	    {
+	        if (!configured_enemy_guess_enabled_)
+	            return;
+	        const auto now_time = now();
+	        const int64_t switch_ns =
+	            static_cast<int64_t>(std::max(1, configured_enemy_guess_switch_interval_ms_)) * 1000000LL;
+	        if (configured_enemy_guess_state_.last_switch_time.nanoseconds() != 0 &&
+	            (now_time - configured_enemy_guess_state_.last_switch_time).nanoseconds() < switch_ns) {
+	            return;
+	        }
+	        ++configured_enemy_guess_state_.current_point;
+	        configured_enemy_guess_state_.last_switch_time = now_time;
+	        RCLCPP_INFO_THROTTLE(
+	            get_logger(), *get_clock(), 1000,
+	            "Configured enemy guess feedback not marked yet, switching to candidate %zu.",
+	            configured_enemy_guess_state_.current_point);
+	    }
+
+	    void apply_configured_enemy_guesses(radar_interface::msg::MatchResult& match_msg)
+	    {
+	        if (!configured_enemy_guess_enabled_)
+	            return;
+
+        const auto now_time = now();
+        if (configured_enemy_guess_state_.last_switch_time.nanoseconds() == 0)
+            configured_enemy_guess_state_.last_switch_time = now_time;
+        const int64_t switch_ns =
+            static_cast<int64_t>(std::max(1, configured_enemy_guess_switch_interval_ms_)) * 1000000LL;
+        if ((now_time - configured_enemy_guess_state_.last_switch_time).nanoseconds() >= switch_ns) {
+            ++configured_enemy_guess_state_.current_point;
+            configured_enemy_guess_state_.last_switch_time = now_time;
+        }
+
+        auto& enemy_slots = team_color_ == radar_interface::team_color::C_BLUE ? match_msg.red : match_msg.blue;
+        auto apply_slot = [&](int slot, int64_t id, const std::array<double, 2>& point, const char* name) {
+            if (slot < 0 || slot >= static_cast<int>(enemy_slots.size()))
+                return;
+            auto& target = enemy_slots[slot];
+            if (!can_apply_guess(target, slot, GuessSource::Configured))
+                return;
+            publish_guess(target, slot, id, point, GuessSource::Configured);
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 1000,
+                "Configured enemy guess publishing %s at (%.2f, %.2f).",
+                name, target.position[0], target.position[1]);
+        };
+
+        const size_t base = configured_enemy_guess_state_.current_point;
+        apply_slot(
+            kSlotEngineer, -70,
+            configured_segment_candidate(
+                configured_enemy_guess_engineer_start_,
+                configured_enemy_guess_engineer_end_,
+                configured_enemy_guess_engineer_radius_m_,
+                base),
+            "engineer");
+        apply_slot(
+            kSlotHero, -71,
+            configured_circle_candidate(
+                configured_enemy_guess_hero_point_,
+                configured_enemy_guess_hero_radius_m_,
+                base + 2),
+            "hero");
+        apply_slot(
+            kSlotSentry, -72,
+            configured_circle_candidate(
+                configured_enemy_guess_sentry_point_,
+                configured_enemy_guess_sentry_radius_m_,
+                base + 4),
+            "sentry");
+        apply_slot(
+            kSlotInfantry4, -74,
+            configured_segment_candidate(
+                configured_enemy_guess_infantry4_start_,
+                configured_enemy_guess_infantry4_end_,
+                configured_enemy_guess_infantry4_radius_m_,
+                base + 6),
+            "infantry4");
+    }
+
     void publish_outputs(const std_msgs::msg::Header& header, const std::vector<radar::Robot>& robots)
     {
         radar_interface::msg::TargetArray targets_msg;
@@ -1960,13 +2320,27 @@ private:
         }
 
         update_camera_fallbacks(robots, targets_msg, detected_msg, match_msg);
-        apply_enemy_lost_mark(match_msg, targets_msg);
-        apply_sentry_blind_guess(match_msg, sentry_targets, sentry_used);
-        apply_fixed_enemy_guesses(match_msg);
-        apply_hero_lob_guess(match_msg);
-        apply_mining_guess(match_msg);
-        apply_enemy_region_guesses(match_msg);
-        apply_corridor_guesses(match_msg, sentry_targets, sentry_used);
+        clear_guess_locks_for_observed_targets(match_msg);
+        const bool legacy_prediction_enabled =
+            enemy_lost_mark_enabled_ ||
+            sentry_blind_guess_enabled_ ||
+            fixed_enemy_guess_enabled_ ||
+            hero_lob_guess_enabled_ ||
+            mining_guess_enabled_ ||
+            early_engineer_guess_enabled_ ||
+            enemy_region_guess_enabled_ ||
+            corridor_guess_enabled_;
+        if (legacy_prediction_enabled && prediction_enabled_by_referee_time()) {
+            apply_enemy_lost_mark(match_msg, targets_msg);
+            apply_sentry_blind_guess(match_msg, sentry_targets, sentry_used);
+            apply_fixed_enemy_guesses(match_msg);
+            apply_hero_lob_guess(match_msg);
+            apply_mining_guess(match_msg);
+            apply_early_engineer_guess(match_msg);
+            apply_enemy_region_guesses(match_msg);
+            apply_corridor_guesses(match_msg, sentry_targets, sentry_used);
+        }
+        apply_configured_enemy_guesses(match_msg);
         if (sentry_overrides > 0) {
             RCLCPP_INFO_THROTTLE(
                 get_logger(), *get_clock(), 1000,
@@ -2005,9 +2379,17 @@ private:
         size_t current_point = 0;
         rclcpp::Time last_switch_time {};
     };
+    struct EarlyEngineerGuessState {
+        size_t current_point = 0;
+        rclcpp::Time last_switch_time {};
+    };
     struct CorridorGuessState {
         size_t current_point = 0;
         rclcpp::Time start_time {};
+        rclcpp::Time last_switch_time {};
+    };
+    struct ConfiguredEnemyGuessState {
+        size_t current_point = 0;
         rclcpp::Time last_switch_time {};
     };
 
@@ -2051,6 +2433,31 @@ private:
             slot.valid = false;
         for (auto& slot : red_lost_mark_slots_)
             slot.valid = false;
+    }
+
+    void reset_prediction_state()
+    {
+        reset_lost_mark_cache();
+        reset_sentry_blind_guess();
+        reset_hero_lob_guess();
+        enemy_region_guess_state_ = {};
+        early_engineer_guess_state_ = {};
+        corridor_guess_state_ = {};
+        last_guess_sources_.fill(GuessSource::None);
+        locked_guess_sources_.fill(GuessSource::None);
+        last_mark_progress_for_source_lock_ = 0;
+    }
+
+    bool prediction_enabled_by_referee_time()
+    {
+        if (has_remain_time_)
+            return true;
+
+        reset_prediction_state();
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 3000,
+            "Prediction disabled until judge/remain_time is received.");
+        return false;
     }
 
     bool apply_lost_mark_to_slot(
@@ -2179,6 +2586,8 @@ private:
     std::string world_frame_;
     std::string car_model_path_;
     std::string armor_model_path_;
+    std::vector<int> armor_class_color_map_;
+    std::vector<int> armor_class_type_map_;
     double min_publish_confidence_ = 0.0;
     double car_confidence_threshold_ = 0.25;
     double armor_confidence_threshold_ = 0.50;
@@ -2243,12 +2652,13 @@ private:
     int locator_near_min_cluster_size_ = 8;
     int locator_mid_min_cluster_size_ = 6;
     int locator_far_min_cluster_size_ = 4;
+    bool locator_debug_enabled_ = false;
     bool sentry_targets_enabled_ = true;
     std::string sentry_targets_topic_;
     int sentry_targets_timeout_ms_ = 500;
     int sentry_targets_max_count_ = 6;
     double sentry_targets_match_dist_ = 0.5;
-    bool sentry_blind_guess_enabled_ = true;
+    bool sentry_blind_guess_enabled_ = false;
     std::string sentry_blind_guess_mark_topic_;
     int sentry_blind_guess_switch_interval_ms_ = 500;
     double sentry_blind_guess_blue_base_min_x_ = 24.0;
@@ -2257,16 +2667,32 @@ private:
     double sentry_blind_guess_red_base_max_x_ = 4.0;
     double sentry_blind_guess_base_min_y_ = 4.0;
     double sentry_blind_guess_base_max_y_ = 10.5;
-    bool hero_lob_guess_enabled_ = true;
+    bool hero_lob_guess_enabled_ = false;
     int hero_lob_guess_switch_interval_ms_ = 500;
     double hero_lob_guess_radius_m_ = 0.6;
+    bool hero_lob_guess_infantry4_enabled_ = false;
+    bool hero_lob_guess_infantry3_fixed_enabled_ = false;
+    double hero_lob_guess_infantry3_x_ = 12.66;
+    double hero_lob_guess_infantry3_y_ = 15.0;
     bool fixed_enemy_guess_enabled_ = false;
     double fixed_enemy_guess_engineer_x_ = 18.19;
     double fixed_enemy_guess_engineer_y_ = 13.33;
     double fixed_enemy_guess_hero_x_ = 23.87;
     double fixed_enemy_guess_hero_y_ = 3.10;
-    bool enemy_region_guess_enabled_ = true;
+    bool enemy_region_guess_enabled_ = false;
     int enemy_region_guess_switch_interval_ms_ = 500;
+    bool mining_guess_enabled_ = false;
+    int mining_guess_switch_interval_ms_ = 500;
+    bool early_engineer_guess_enabled_ = false;
+    int early_engineer_guess_switch_interval_ms_ = 500;
+    int early_engineer_guess_early_duration_ms_ = 60000;
+    double early_engineer_guess_radius_m_ = 0.3;
+    double early_engineer_guess_late_radius_m_ = 0.6;
+    double early_engineer_guess_late_shift_x_m_ = 1.0;
+    std::vector<std::array<double, 2>> early_engineer_guess_points_ {{
+        {9.91, 3.66},
+        {10.02, 2.14},
+    }};
     double enemy_region_guess_engineer_x_ = 15.36;
     double enemy_region_guess_engineer_y_ = 7.27;
     double enemy_region_guess_engineer_radius_m_ = 0.5;
@@ -2277,6 +2703,7 @@ private:
         {11.5, 14.0},
     }};
     std::array<double, 2> enemy_region_guess_priority_point_ {12.66, 15.0};
+    EarlyEngineerGuessState early_engineer_guess_state_;
     bool corridor_guess_enabled_ = false;
     int corridor_guess_switch_interval_ms_ = 500;
     int corridor_guess_early_duration_ms_ = 120000;
@@ -2289,6 +2716,20 @@ private:
         kSlotInfantry3,
         kSlotInfantry4,
     };
+    bool configured_enemy_guess_enabled_ = false;
+    std::string configured_enemy_guess_reference_color_ = "red";
+    int configured_enemy_guess_switch_interval_ms_ = 500;
+    std::array<double, 2> configured_enemy_guess_engineer_start_ {9.91, 3.66};
+    std::array<double, 2> configured_enemy_guess_engineer_end_ {10.02, 2.14};
+    double configured_enemy_guess_engineer_radius_m_ = 0.4;
+    std::array<double, 2> configured_enemy_guess_hero_point_ {15.5, 14.0};
+    double configured_enemy_guess_hero_radius_m_ = 0.5;
+    std::array<double, 2> configured_enemy_guess_sentry_point_ {10.0, 12.0};
+    double configured_enemy_guess_sentry_radius_m_ = 0.4;
+    std::array<double, 2> configured_enemy_guess_infantry4_start_ {9.35, 7.5};
+    std::array<double, 2> configured_enemy_guess_infantry4_end_ {11.0, 7.5};
+    double configured_enemy_guess_infantry4_radius_m_ = 0.4;
+    ConfiguredEnemyGuessState configured_enemy_guess_state_;
     static constexpr double kFieldWidthM = 28.0;
     static constexpr double kFieldHeightM = 15.0;
     const std::array<std::array<double, 2>, 3> hero_lob_guess_points_ {{
@@ -2307,7 +2748,7 @@ private:
         {{-0.7071, -0.7071}},
         {{0.7071, -0.7071}},
     }};
-    bool enemy_lost_mark_enabled_ = true;
+    bool enemy_lost_mark_enabled_ = false;
     double enemy_lost_mark_rect_min_x_ = 6.0;
     double enemy_lost_mark_rect_min_y_ = 10.0;
     double enemy_lost_mark_rect_max_x_ = 11.5;

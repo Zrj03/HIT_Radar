@@ -1,6 +1,7 @@
 #include "RosNode.h"
 
 #include <filesystem>
+#include <exception>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <std_srvs/srv/empty.hpp>
@@ -54,7 +55,15 @@ void DetectorNode::prepare_lidars()
         l_ctx->subscriber = create_subscription<sensor_msgs::msg::PointCloud2>(topic_name, rclcpp::QoS(rclcpp::KeepLast(10)),
             [this, l_ctx](const sensor_msgs::msg::PointCloud2& pc) { pc_recv_callback(pc, l_ctx); });
 
-        prepare_voxel_grid(*l_ctx);
+        try {
+            prepare_voxel_grid(*l_ctx);
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(
+                get_logger(),
+                "Failed to prepare voxel grid for %s using frame %s: %s",
+                lidar_name.c_str(), tf_name.c_str(), e.what());
+            throw;
+        }
 
         lidars.push_back(l_ctx);
     }
@@ -161,15 +170,28 @@ void DetectorNode::prepare_voxel_grid(LidarContext& l_ctx)
     static auto occupy_expand = declare_parameter("voxel_grid.occupy_expand", 0.15);
 
     VoxelGrid& voxel_grid = l_ctx.voxel_grid;
+    RCLCPP_DEBUG(
+        get_logger(),
+        "Preparing voxel grid for %s: min=[%.3f, %.3f, %.3f], max=[%.3f, %.3f, %.3f], voxel=%.3f, mesh_filter_mode=%s",
+        l_ctx.tf_frame.c_str(),
+        size_min[0], size_min[1], size_min[2],
+        size_max[0], size_max[1], size_max[2],
+        voxel_size,
+        mesh_filter_mode ? "mesh" : "pointcloud");
     voxel_grid.initialize({ { size_min[0], size_min[1], size_min[2] },
         { size_max[0], size_max[1], size_max[2] },
         voxel_size });
 
-    if (mesh_filter_mode)
+    if (mesh_filter_mode) {
+        RCLCPP_DEBUG(get_logger(), "Occupying voxel grid by mesh filter");
         voxel_grid.occupy_by_mesh_filter(mesh_filter, occupy_expand);
-    else
+    } else {
+        RCLCPP_DEBUG(get_logger(), "Occupying voxel grid by pointcloud filter");
         voxel_grid.occupy_by_pc(pc_filter, dilate_size);
+    }
+    RCLCPP_DEBUG(get_logger(), "Occupying voxel grid by arena mesh from lidar origin");
     voxel_grid.occupy_by_mesh(mesh_ori, l_ctx.trans * Eigen::Vector3d::Zero(), dilate_size);
+    RCLCPP_DEBUG(get_logger(), "Voxel grid prepared for %s", l_ctx.tf_frame.c_str());
 
     // open3d::visualization::DrawGeometries({ mesh_ori, std::make_shared<open3d::geometry::VoxelGrid>(voxel_grid.o3d_grid) }, "Voxel Grid", 1920, 1080);
 }

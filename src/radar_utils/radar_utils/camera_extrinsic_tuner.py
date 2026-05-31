@@ -352,6 +352,20 @@ class CameraExtrinsicTuner(Node):
             return
 
         world_from_lidar = _transform_to_matrix(world_from_lidar_msg)
+        lidar_pose_translation = world_from_lidar[:3, 3]
+        lidar_pose_rotation = world_from_lidar[:3, :3]
+        lidar_pose_is_default = (
+            np.linalg.norm(lidar_pose_translation) < 1e-3
+            and np.linalg.norm(lidar_pose_rotation - np.eye(3, dtype=np.float64)) < 1e-3
+        )
+        if lidar_pose_is_default:
+            self.get_logger().error(
+                "Refusing to save calibration: world->lidar is still the default identity transform. "
+                "Wait for pc_aligner to publish a valid field alignment before pressing Enter.")
+            return
+        self.get_logger().info(
+            "Using world->lidar translation="
+            f"{lidar_pose_translation.reshape(-1).tolist()} for lidar->camera solve.")
         lidar_to_camera = camera_from_world @ world_from_lidar
         self.last_lidar_to_camera = lidar_to_camera
         self.get_logger().info(f"solvePnP rvec={rvec.reshape(-1).tolist()} tvec={tvec.reshape(-1).tolist()}")
@@ -386,8 +400,8 @@ class CameraExtrinsicTuner(Node):
             return
         msg = _matrix_to_transform(
             self.last_lidar_to_camera,
-            self.lidar_frame,
             self.camera_frame,
+            self.lidar_frame,
             self.get_clock().now().to_msg(),
         )
         self.tf_broadcaster.sendTransform(msg)

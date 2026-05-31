@@ -77,7 +77,7 @@ MatcherNode::MatcherNode(const rclcpp::NodeOptions& options)
     declare_parameter("async_identity_fusion", true);
     declare_parameter("identity_hold_ms", 2500);
     declare_parameter("identity_stale_value_dec", 1);
-    declare_parameter("enemy_lost_mark_enabled", true);
+    declare_parameter("enemy_lost_mark_enabled", false);
     declare_parameter("enemy_lost_mark_rect_min_x", 6.0);
     declare_parameter("enemy_lost_mark_rect_min_y", 10.0);
     declare_parameter("enemy_lost_mark_rect_max_x", 11.5);

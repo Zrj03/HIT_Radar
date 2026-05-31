@@ -80,6 +80,44 @@ class Locator {
 
     void search(std::vector<Robot>& robot) const noexcept;
 
+    inline size_t foregroundPointCount() const noexcept {
+        return cloud_foreground_ ? cloud_foreground_->size() : 0;
+    }
+
+    inline size_t clusterCount() const noexcept { return clusters_.size(); }
+
+    inline size_t lastProjectedPointCount() const noexcept {
+        return last_projected_points_;
+    }
+
+    inline size_t lastInputPointCount() const noexcept {
+        return last_input_points_;
+    }
+
+    inline size_t lastZeroPointCount() const noexcept {
+        return last_zero_points_;
+    }
+
+    inline size_t lastMaxDistanceRejectCount() const noexcept {
+        return last_max_distance_rejects_;
+    }
+
+    inline size_t lastInvalidCameraRejectCount() const noexcept {
+        return last_invalid_camera_rejects_;
+    }
+
+    inline size_t lastImageBoundsRejectCount() const noexcept {
+        return last_image_bounds_rejects_;
+    }
+
+    inline size_t lastDepthPixelCount() const noexcept {
+        return last_depth_pixels_;
+    }
+
+    inline size_t lastSearchCandidatePointCount() const noexcept {
+        return last_search_candidate_points_;
+    }
+
    private:
     cv::Point3f cameraToLidar(const cv::Point3f& point) const noexcept;
     cv::Point3f lidarToWorld(const cv::Point3f& point) const noexcept;
@@ -109,6 +147,14 @@ class Locator {
     std::map<int, int> index_cluster_map_;
     std::vector<pcl::PointIndices> clusters_;
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_foreground_;
+    size_t last_input_points_ = 0;
+    size_t last_zero_points_ = 0;
+    size_t last_max_distance_rejects_ = 0;
+    size_t last_invalid_camera_rejects_ = 0;
+    size_t last_image_bounds_rejects_ = 0;
+    size_t last_projected_points_ = 0;
+    size_t last_depth_pixels_ = 0;
+    mutable size_t last_search_candidate_points_ = 0;
 };
 
 }  // namespace radar

@@ -176,7 +176,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'enable_gimbal_serial',
-            default_value='true',
+            default_value='false',
             description='Whether to launch gimbal_serial (requires /dev/radar)'
         ),
         DeclareLaunchArgument(
@@ -248,8 +248,8 @@ def generate_launch_description():
         ),
         get_matrix_tf_broadcaster(
             load_lidar_to_camera_matrix(),
-            'lidar_mid70_frame',
             'hik_6mm_frame',
+            'lidar_mid70_frame',
             condition=UnlessCondition(enable_camera_extrinsic_tuner)
         ),
         *get_pc_container(),
@@ -350,16 +350,16 @@ def generate_launch_description():
             output='log',
         ),
         # Gimbal Serial node：接收/radar/uav_target并通过串口控制云台
-        Node(
-            package='serial_node',
-            executable='gimbal_serial',
-            name='gimbal_serial',
-            condition=IfCondition(enable_gimbal_serial),
-            output='log',
-            parameters=[
-                {'port': '/dev/radar'},
-                {'baud': 115200},
-                {'target_y_offset': -0.5},
-            ],
-        ),
+        # Node(
+        #     package='serial_node',
+        #     executable='gimbal_serial',
+        #     name='gimbal_serial',
+        #     condition=IfCondition(enable_gimbal_serial),
+        #     output='log',
+        #     parameters=[
+        #         {'port': '/dev/radar'},
+        #         {'baud': 115200},
+        #         {'target_y_offset': -0.5},
+        #     ],
+        # ),
     ])

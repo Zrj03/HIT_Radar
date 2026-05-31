@@ -199,6 +199,7 @@ def generate_launch_description():
     enable_judge_bridge = LaunchConfiguration('enable_judge_bridge')
     enable_gimbal_serial = LaunchConfiguration('enable_gimbal_serial')
     enable_camera_extrinsic_tuner = LaunchConfiguration('enable_camera_extrinsic_tuner')
+    enable_foxglove = LaunchConfiguration('enable_foxglove')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -208,13 +209,18 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'enable_gimbal_serial',
-            default_value='true',
+            default_value='false',
             description='Whether to launch gimbal_serial (requires /dev/radar)'
         ),
         DeclareLaunchArgument(
             'enable_camera_extrinsic_tuner',
             default_value='false',
             description='Launch T-DT style camera extrinsic tuner and disable static lidar->camera TF'
+        ),
+        DeclareLaunchArgument(
+            'enable_foxglove',
+            default_value='true',
+            description='Launch foxglove_bridge websocket server for pointcloud visualization'
         ),
         *get_vision_container(
             'hik_6mm', 'DB0108949', 'package://hik_camera/config/6mm.yaml'),
@@ -229,8 +235,8 @@ def generate_launch_description():
         ),
         get_matrix_tf_broadcaster(
             load_lidar_to_camera_matrix(),
-            'lidar_mid70_frame',
             'hik_6mm_frame',
+            'lidar_mid70_frame',
             condition=UnlessCondition(enable_camera_extrinsic_tuner)
         ),
         *get_pc_container(),
@@ -282,11 +288,13 @@ def generate_launch_description():
             output='log',
         ),
 
-        # Foxglove bridge disabled.
-        # Node(
-        #     package='foxglove_bridge',
-        #     executable='foxglove_bridge',
-        # ),
+        Node(
+            package='foxglove_bridge',
+            executable='foxglove_bridge',
+            name='foxglove_bridge',
+            condition=IfCondition(enable_foxglove),
+            output='log',
+        ),
 
         Node(
             package='target_visualizer',

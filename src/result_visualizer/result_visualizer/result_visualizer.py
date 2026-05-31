@@ -65,7 +65,7 @@ class ResultVisualizer(Node):
         if int(np.__version__.split('.')[0]) >= 2:
             self.cv_bridge_disabled = True
             self.get_logger().warn(
-                'NumPy>=2 detected; skip cv_bridge import to avoid ABI crash. result_image will not be published.')
+                'NumPy>=2 detected; skip cv_bridge import to avoid ABI crash. Use native result_image publisher.')
             return
         try:
             from cv_bridge import CvBridge
@@ -75,6 +75,19 @@ class ResultVisualizer(Node):
             self.cv_bridge_disabled = True
             self.get_logger().error(
                 f'cv_bridge unavailable, disable result_image publish: {e}')
+
+    def _cv2_to_image_msg(self, img):
+        contiguous = np.ascontiguousarray(img)
+        msg = Image()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.height = contiguous.shape[0]
+        msg.width = contiguous.shape[1]
+        msg.encoding = 'bgr8'
+        msg.is_bigendian = False
+        msg.step = contiguous.shape[1] * contiguous.shape[2]
+        msg.data = array('B', contiguous.tobytes())
+        return msg
 
     def team_color_callback(self, msg: Bool):
         self.team_color = msg.data
@@ -142,7 +155,9 @@ class ResultVisualizer(Node):
         self._try_init_bridge()
         if self.bridge is not None:
             img = self.bridge.cv2_to_imgmsg(now_img, encoding="bgr8")
-            self.img_pub.publish(img)
+        else:
+            img = self._cv2_to_image_msg(now_img)
+        self.img_pub.publish(img)
         if self.get_parameter('im_show').value:
             cv2.namedWindow('result', cv2.WINDOW_NORMAL)
             cv2.imshow('result', now_img)

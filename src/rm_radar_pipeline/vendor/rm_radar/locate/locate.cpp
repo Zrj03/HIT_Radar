@@ -153,6 +153,9 @@ Locator::Locator(int image_width, int image_height,
     background_depth_image_.create(image_height_zoomed_, image_width_zoomed_,
                                    CV_32F);
     diff_depth_image_.create(image_height_zoomed_, image_width_zoomed_, CV_32F);
+    depth_image_.setTo(0);
+    background_depth_image_.setTo(0);
+    diff_depth_image_.setTo(0);
 
     cluster_extractor_.setClusterTolerance(cluster_tolerance);
     cluster_extractor_.setMinClusterSize(min_cluster_size);
@@ -174,6 +177,13 @@ void Locator::update(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) noexcept {
     depth_image_.setTo(0);
     diff_depth_image_.setTo(0);
+    last_input_points_ = cloud ? cloud->size() : 0;
+    last_zero_points_ = 0;
+    last_max_distance_rejects_ = 0;
+    last_invalid_camera_rejects_ = 0;
+    last_image_bounds_rejects_ = 0;
+    last_projected_points_ = 0;
+    last_depth_pixels_ = 0;
 
     if (!cloud) {
         std::cerr << "cloud is null." << std::endl;
@@ -189,23 +199,32 @@ void Locator::update(
         std::execution::seq, cloud->begin(), cloud->end(),
         [this](const pcl::PointXYZ& point) {
             if (iszero(point.x) && iszero(point.y) && iszero(point.z)) {
+                ++last_zero_points_;
                 return;
             }
             if (point.x > max_distance_) {
+                ++last_max_distance_rejects_;
                 return;
             }
             auto uvd = lidarToCamera(cv::Point3f(point.x, point.y, point.z));
             float &u = uvd.x, &v = uvd.y, &d = uvd.z;
-            if (!std::isfinite(u) || !std::isfinite(v) || !std::isfinite(d) || d <= 0 ||
-                u < 0 || u >= image_width_zoomed_ || v < 0 ||
-                v >= image_height_zoomed_) {
+            if (!std::isfinite(u) || !std::isfinite(v) || !std::isfinite(d) || d <= 0) {
+                ++last_invalid_camera_rejects_;
                 return;
             }
+            if (u < 0 || u >= image_width_zoomed_ || v < 0 || v >= image_height_zoomed_) {
+                ++last_image_bounds_rejects_;
+                return;
+            }
+            ++last_projected_points_;
             float& background_depth = background_depth_image_.at<float>(v, u);
             if (d > background_depth) {
                 background_depth = d;
             }
-            depth_image_.at<float>(v, u) = d;
+            float& depth = depth_image_.at<float>(v, u);
+            if (iszero(depth))
+                ++last_depth_pixels_;
+            depth = d;
         });
 
     depth_images_.push_back(depth_image_.clone());
@@ -378,6 +397,9 @@ void Locator::search(Robot& robot) const noexcept {
     if (candidates.empty()) {
         return;
     }
+    for (const auto& [_, points] : candidates) {
+        last_search_candidate_points_ += points.size();
+    }
     auto& points =
         std::ranges::max_element(candidates, [](auto&& pair_a, auto&& pair_b) {
             return pair_a.second.size() < pair_b.second.size();
@@ -399,6 +421,7 @@ void Locator::search(Robot& robot) const noexcept {
  * @param robots The vector of Robot objects to search for.
  */
 void Locator::search(std::vector<Robot>& robots) const noexcept {
+    last_search_candidate_points_ = 0;
     std::for_each(std::execution::seq, robots.begin(), robots.end(),
                   [this](Robot& robot) { search(robot); });
 }
