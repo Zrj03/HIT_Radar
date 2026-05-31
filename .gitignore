@@ -30,3 +30,11 @@ __pycache__/
 # test_data/
 # radar_model.pt
 .vscode/
+
+# large videos / recordings
+*.mp4
+*.avi
+*.mkv
+*.bag
+*.db3
+radar/national_01/video/
