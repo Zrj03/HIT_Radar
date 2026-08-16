@@ -26,7 +26,7 @@
     quality_gate.max_rmse: 0.45
     quality_gate.min_fitness: 0.70
 
-    # Initial lidar->middle guess from measured national stand pose:
+    # Initial lidar->middle estimate from measured national stand pose:
     # world lidar pose ~= [x=0.0, y=7.5, z=3.985], yaw=0 (facing +X).
     init_trans: [0.0, -8.0, -3.985, 0.993068, 0.0, 0.117537, 0.0]
 
@@ -85,10 +85,12 @@
     image_topic: "hik_6mm/image"
     camera_info_topic: "hik_6mm/camera_info"
     pointcloud_topic: "lidar_mid70/pc_raw"
-    car_model_path: "/home/ajian/clear_radar-main/src/rm_radar_pipeline/models/car_25.onnx"
-    armor_model_path: "/home/ajian/clear_radar-main/src/rm_radar_pipeline/models/armor_qiqi25.onnx"
+    car_model_path: "/home/ajian/clear_radar-main/src/rm_radar_pipeline/models/yolov8l_193.onnx"
+    # armor_v8.onnx output: [x, y, w, h, 12 classes] x 8400
+    # class order: B1 B2 B3 B4 B5 Bsentry R1 R2 R3 R4 R5 Rsentry
+    armor_model_path: "/home/ajian/clear_radar-main/src/nn_detector/models/armor_v8.onnx"
     armor_class_color_map: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
-    armor_class_type_map: [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5]
+    armor_class_type_map: [1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0]
     camera_frame: "hik_6mm_frame"
     lidar_frame: "lidar_mid70_frame"
     world_frame: "world"
@@ -120,7 +122,8 @@
     tracker_static_smooth_radius: 0.45
     tracker_static_smooth_alpha: 0.25
 
-    # uav_detection_enabled: true
+    # 无人机检测
+    uav_detection_enabled: false
     visualization_enabled: true
     visualization_imshow: false
     visualization_window_width: 1280
@@ -146,7 +149,7 @@
     locator_min_cluster_size: 3
     locator_max_cluster_size: 600
     locator_max_distance: 29300.0
-    
+
     locator_adaptive_cluster_enabled: false
     locator_near_distance: 10000.0
     locator_mid_distance: 18000.0
@@ -156,104 +159,41 @@
     locator_near_min_cluster_size: 8
     locator_mid_min_cluster_size: 6
     locator_far_min_cluster_size: 4
+    locator_debug_enabled: true
 
     sentry_targets_enabled: true
     sentry_targets_topic: "judge/sentry_targets"
     sentry_targets_timeout_ms: 500
     sentry_targets_max_count: 6
     sentry_targets_match_dist: 0.5
-    sentry_blind_guess_enabled: false
-    # sentry_blind_guess_mark_topic: "judge/radar_mark_data"
-    # sentry_blind_guess_switch_interval_ms: 500
-    # sentry_blind_guess_blue_base_min_x: 24.0
-    # sentry_blind_guess_blue_base_max_x: 28.5
-    # sentry_blind_guess_red_base_min_x: 0.0
-    # sentry_blind_guess_red_base_max_x: 4.0
-    # sentry_blind_guess_base_min_y: 4.0
-    # sentry_blind_guess_base_max_y: 10.5
-
-    hero_lob_guess_enabled: false
-    # hero_lob_guess_switch_interval_ms: 500
-    # hero_lob_guess_radius_m: 0.3
-    # hero_lob_guess_infantry4_enabled: true
-    # hero_lob_guess_infantry3_fixed_enabled: true
-    # hero_lob_guess_infantry3_x: 12.66
-    # hero_lob_guess_infantry3_y: 15.0
-
-    fixed_enemy_guess_enabled: false
-    # fixed_enemy_guess_engineer_x: 18.19
-    # fixed_enemy_guess_engineer_y: 13.33
-    # fixed_enemy_guess_hero_x: 23.87
-    # fixed_enemy_guess_hero_y: 3.10
-    enemy_region_guess_enabled: false
-    # enemy_region_guess_switch_interval_ms: 500
-    mining_guess_enabled: false
-    # mining_guess_switch_interval_ms: 500
-    early_engineer_guess_enabled: false
-    # early_engineer_guess_switch_interval_ms: 500
-    # early_engineer_guess_early_duration_ms: 60000
-    # early_engineer_guess_radius_m: 0.3
-    # early_engineer_guess_late_radius_m: 0.6
-    # early_engineer_guess_late_shift_x_m: 1.0
-    # early_engineer_guess_points: [
-    #   9.91, 3.66,
-    #   10.02, 2.14
-    # ]
-    # enemy_region_guess_engineer_x: 15.36
-    # enemy_region_guess_engineer_y: 7.27
-    # enemy_region_guess_engineer_radius_m: 0.5
-    # enemy_region_guess_polygon: [
-    #   9.48, 9.08,
-    #   8.77, 10.65,
-    #   12.66, 15.0,
-    #   11.5, 14.0
-    # ]
-    # enemy_region_guess_priority_point: [12.66, 15.0]
-    corridor_guess_enabled: false
-    # corridor_guess_switch_interval_ms: 500
-    # corridor_guess_early_duration_ms: 120000
-    # corridor_guess_late_duration_ms: 300000
-    # corridor_guess_start: [3.39, 1.65]
-    # corridor_guess_end: [9.81, 1.67]
-    # corridor_guess_radius_m: 0.5
-    # Slots: 0=sentry(7), 1=hero(1), 2=engineer(2), 3=infantry3, 4=infantry4, 5=infantry5/aerial.
-    # corridor_guess_early_slots: [2, 3, 4]
-
-    configured_enemy_guess_enabled: true
-    # Guess points are authored in red-side field coordinates. When we are BLUE,
-    # the enemy is RED so points are sent as-is; when we are RED, rm_radar_pipeline
-    # mirrors them to the blue side automatically.
-    configured_enemy_guess_reference_color: red
-    configured_enemy_guess_switch_interval_ms: 500
-    configured_enemy_guess_engineer_segment: [
-      9.91, 3.66,
-      10.02, 2.14
-    ]
-    configured_enemy_guess_engineer_radius_m: 0.4
-    configured_enemy_guess_hero_point: [15.5, 14.0]
-    configured_enemy_guess_hero_radius_m: 0.5
-    configured_enemy_guess_sentry_point: [10.0, 12.0]
-    configured_enemy_guess_sentry_radius_m: 0.4
-    configured_enemy_guess_infantry4_segment: [
-      9.35, 7.5,
-      11.0, 7.5
-    ]
-    configured_enemy_guess_infantry4_radius_m: 0.4
+    fixed_slot_guess_enabled: true
+    fixed_slot_guess_switch_interval_ms: 500
+    fixed_slot_guess_radius_m: 0.2
+    fixed_slot_guess_hero_point: [11.5, 12.3]
+    fixed_slot_guess_hero_point_side: own
+    fixed_slot_guess_engineer_point: [15.4, 7.3]
+    fixed_slot_guess_engineer_point_side: enemy
+    early_all_enemy_guess_enabled: true
+    early_all_enemy_guess_point: [10.8, 4.2]
+    early_all_enemy_guess_point_side: enemy
+    early_all_enemy_guess_radius_m: 0.3
+    early_all_enemy_guess_switch_interval_ms: 500
+    early_all_enemy_guess_min_remain_time_sec: 240
+    early_all_enemy_guess_max_remain_time_sec: 420
+    late_all_enemy_guess_enabled: true
+    late_all_enemy_guess_points: [12.1, 8.6, 12.0, 9.5, 10.7, 8.0]
+    late_all_enemy_guess_point_side: enemy
+    late_all_enemy_guess_radius_m: 0.2
+    late_all_enemy_guess_switch_interval_ms: 500
+    late_all_enemy_guess_min_remain_time_sec: 0
+    late_all_enemy_guess_max_remain_time_sec: 240
 
     default_team_color: blue
-    enemy_lost_mark_enabled: false
-    # enemy_lost_mark_rect_min_x: 6.0
-    # enemy_lost_mark_rect_min_y: 10.0
-    # enemy_lost_mark_rect_max_x: 11.5
-    # enemy_lost_mark_rect_max_y: 14.0
-    # enemy_lost_mark_x: 4.0
-    # enemy_lost_mark_y: 14.0
-    # enemy_lost_mark_radius: 1.5
-    # enemy_lost_mark_hold_ms: 1500
 
+    # 模型置信度
     min_publish_confidence: 0.0
-    car_confidence_threshold: 0.25
-    armor_confidence_threshold: 0.10
+    car_confidence_threshold: 0.6
+    armor_confidence_threshold: 0.25
     nms_threshold: 0.70
 
 /radar/multiplexer:

@@ -58,8 +58,6 @@ private:
 
     void multiplexer();
 
-    // void load_blind_guess();
-
     static uint16_t mark_mask_for_type(unsigned type);
     bool is_enemy_slot(int slot_idx) const;
     static bool mark_set(const radar_interface::msg::RadarMarkData& mark, unsigned type);

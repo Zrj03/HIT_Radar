@@ -77,18 +77,6 @@ MatcherNode::MatcherNode(const rclcpp::NodeOptions& options)
     declare_parameter("async_identity_fusion", true);
     declare_parameter("identity_hold_ms", 2500);
     declare_parameter("identity_stale_value_dec", 1);
-    declare_parameter("enemy_lost_mark_enabled", false);
-    declare_parameter("enemy_lost_mark_rect_min_x", 6.0);
-    declare_parameter("enemy_lost_mark_rect_min_y", 10.0);
-    declare_parameter("enemy_lost_mark_rect_max_x", 11.5);
-    declare_parameter("enemy_lost_mark_rect_max_y", 14.0);
-    declare_parameter("enemy_lost_mark_circle_x", 12.66);
-    declare_parameter("enemy_lost_mark_circle_y", 15.0);
-    declare_parameter("enemy_lost_mark_circle_radius", 0.5);
-    declare_parameter("enemy_lost_mark_x", 4.0);
-    declare_parameter("enemy_lost_mark_y", 14.0);
-    declare_parameter("enemy_lost_mark_radius", 1.5);
-    declare_parameter("enemy_lost_mark_hold_ms", 1500);
     auto default_team_color = declare_parameter("default_team_color", std::string("blue"));
     std::transform(default_team_color.begin(), default_team_color.end(), default_team_color.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -259,15 +247,6 @@ void MatcherNode::feedback_callback(const radar_interface::msg::FeedbackTargetAr
     }
 }
 
-bool MatcherNode::is_enemy_slot(bool slot_is_blue) const
-{
-    if (color == radar_interface::team_color::C_RED)
-        return slot_is_blue;
-    if (color == radar_interface::team_color::C_BLUE)
-        return !slot_is_blue;
-    return false;
-}
-
 bool MatcherNode::should_preserve_identity_on_visual_miss(long target_id) const
 {
     if (!get_parameter("async_identity_fusion").as_bool())
@@ -282,37 +261,6 @@ bool MatcherNode::should_preserve_identity_on_visual_miss(long target_id) const
         return true;
 
     return (this->now() - it->second).nanoseconds() <= static_cast<int64_t>(hold_ms) * 1000000ll;
-}
-
-bool MatcherNode::is_in_enemy_lost_mark_rect(const radar_interface::msg::MatchedTarget& target) const
-{
-    if (target.id == -1)
-        return false;
-
-    const double min_x = std::min(
-        get_parameter("enemy_lost_mark_rect_min_x").as_double(),
-        get_parameter("enemy_lost_mark_rect_max_x").as_double());
-    const double max_x = std::max(
-        get_parameter("enemy_lost_mark_rect_min_x").as_double(),
-        get_parameter("enemy_lost_mark_rect_max_x").as_double());
-    const double min_y = std::min(
-        get_parameter("enemy_lost_mark_rect_min_y").as_double(),
-        get_parameter("enemy_lost_mark_rect_max_y").as_double());
-    const double max_y = std::max(
-        get_parameter("enemy_lost_mark_rect_min_y").as_double(),
-        get_parameter("enemy_lost_mark_rect_max_y").as_double());
-
-    const bool in_rect = target.position[0] >= min_x && target.position[0] <= max_x
-        && target.position[1] >= min_y && target.position[1] <= max_y;
-    if (in_rect)
-        return true;
-
-    const double circle_x = get_parameter("enemy_lost_mark_circle_x").as_double();
-    const double circle_y = get_parameter("enemy_lost_mark_circle_y").as_double();
-    const double circle_radius = std::max(0.0, get_parameter("enemy_lost_mark_circle_radius").as_double());
-    const double dx = target.position[0] - circle_x;
-    const double dy = target.position[1] - circle_y;
-    return dx * dx + dy * dy <= circle_radius * circle_radius;
 }
 
 void MatcherNode::match_and_pub(const radar_interface::msg::TargetArray::SharedPtr msg)
@@ -576,50 +524,14 @@ void MatcherNode::match_and_pub(const radar_interface::msg::TargetArray::SharedP
                 return;
             }
         };
-        auto apply_lost_mark = [&](auto& result_target, const HeldMatchedTarget& held_target, bool slot_is_blue) {
-            if (!get_parameter("enemy_lost_mark_enabled").as_bool())
-                return false;
-            if (result_target.id != -1 || !held_target.valid)
-                return false;
-            if (!is_enemy_slot(slot_is_blue) || !is_in_enemy_lost_mark_rect(held_target.target))
-                return false;
-            if (std::any_of(msg->targets.begin(), msg->targets.end(), [&](const auto& track) {
-                    return static_cast<long>(track.id) == held_target.target.id
-                        && static_cast<int>(track.uncertainty) < uncertainty_limit;
-                }))
-                return false;
-
-            const auto lost_mark_ns = static_cast<int64_t>(
-                std::max<int64_t>(0, get_parameter("enemy_lost_mark_hold_ms").as_int())) * 1000000ll;
-            if ((now - held_target.stamp).nanoseconds() > lost_mark_ns)
-                return false;
-
-            result_target = held_target.target;
-            const double fallback_x = get_parameter("enemy_lost_mark_x").as_double();
-            const double fallback_y = get_parameter("enemy_lost_mark_y").as_double();
-            const double fallback_radius = std::max(0.0, get_parameter("enemy_lost_mark_radius").as_double());
-            const double dx = held_target.target.position[0] - fallback_x;
-            const double dy = held_target.target.position[1] - fallback_y;
-            const double dist = std::hypot(dx, dy);
-            const double scale = dist > fallback_radius && dist > 1e-6 ? fallback_radius / dist : 1.0;
-            result_target.position[0] = fallback_x + dx * scale;
-            result_target.position[1] = fallback_y + dy * scale;
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                "Enemy target %ld lost after rectangle hit, marking fallback at (%.2f, %.2f).",
-                result_target.id, result_target.position[0], result_target.position[1]);
-            return true;
-        };
-
         if (next_result.blue[i].id == -1 && held_blue_targets[i].valid) {
             refresh_held_from_track(held_blue_targets[i]);
-            if (!apply_lost_mark(next_result.blue[i], held_blue_targets[i], true)
-                && (now - held_blue_targets[i].stamp).nanoseconds() <= hold_ns)
+            if ((now - held_blue_targets[i].stamp).nanoseconds() <= hold_ns)
                 next_result.blue[i] = held_blue_targets[i].target;
         }
         if (next_result.red[i].id == -1 && held_red_targets[i].valid) {
             refresh_held_from_track(held_red_targets[i]);
-            if (!apply_lost_mark(next_result.red[i], held_red_targets[i], false)
-                && (now - held_red_targets[i].stamp).nanoseconds() <= hold_ns)
+            if ((now - held_red_targets[i].stamp).nanoseconds() <= hold_ns)
                 next_result.red[i] = held_red_targets[i].target;
         }
     }

@@ -61,8 +61,6 @@ private:
     void vis_timer_callback();
     void pos_reinforce_timer_callback();
     bool should_preserve_identity_on_visual_miss(long target_id) const;
-    bool is_enemy_slot(bool slot_is_blue) const;
-    bool is_in_enemy_lost_mark_rect(const radar_interface::msg::MatchedTarget& target) const;
 
     int pos_reinforce(float x, float y);
     int inner_pos_reinforce(float x, float y);

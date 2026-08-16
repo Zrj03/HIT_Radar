@@ -149,12 +149,9 @@ void MultiplexerNode::radar_mark_callback(const radar_interface::msg::RadarMarkD
         fb.type = i;
         fb.color = enemy_color;
 
-        // keep_guess[i] = false;
         if (now_marked && !last_marked) {
             fb.is_right = true;
             RCLCPP_INFO(get_logger(), "Right map: type: %d, id: %ld, mark_progress: %#x", i, last_pub_id[enemy_slot], msg.mark_progress);
-            // else if (last_pub_id[i] < -1) // for blind guess
-            //     keep_guess[i] = true;
             if (last_pub_id[enemy_slot] > -1)
                 fb_array.targets.push_back(fb);
         }

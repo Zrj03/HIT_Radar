@@ -1,11 +1,6 @@
 #include "target_multiplexer/target_multiplexer.hpp"
-#include <ament_index_cpp/get_package_share_directory.hpp>
-#include <filesystem>
-#include <toml.hpp>
 #include <algorithm>
 #include <cctype>
-
-// 由于裁判系统反馈是 1Hz ，如果要猜测一个目标，应该要在 1s 内发送 2 次以上的坐标，所以应该要记住每次发送的
 
 using namespace target_multiplexer;
 
@@ -20,7 +15,6 @@ MultiplexerNode::MultiplexerNode()
     }
     last_mark.mark_progress = 0;
     last_pub_id.fill(-1);
-    // load_blind_guess();
 
     declare_parameter("double_send_thres", 100);
     declare_parameter("detected_hold_sec", 1.5);
@@ -76,18 +70,3 @@ void MultiplexerNode::team_color_callback(const radar_interface::team_color::msg
             break;
         }
 }
-
-// void MultiplexerNode::load_blind_guess()
-// {
-//     auto data = toml::parse(
-//         std::filesystem::path(ament_index_cpp::get_package_share_directory("target_multiplexer")) / "config" / "blind_guess.toml");
-
-//     auto& robots = data["robot"];
-//     for (unsigned i = 0; i < 6; ++i) {
-//         if (!robots.contains(std::to_string(i)))
-//             continue;
-//         auto& robot = robots[std::to_string(i)];
-//         for (auto& pos : toml::get<std::vector<std::vector<float>>>(robot["positions"]))
-//             blind_guess[i].emplace_back(pos[0], pos[1]);
-//     }
-// }
